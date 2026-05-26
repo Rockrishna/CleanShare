@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- 1. Background glow / semi-transparent card body for exquisite depth -->
+    <path
+        android:fillColor="#26FFFFFF"
+        android:pathData="M 38,31 L 64,31 L 74,41 L 74,73 C 74,75.2 72.2,77 70,77 L 38,77 C 35.8,77 34,75.2 34,73 L 34,35 C 34,32.8 35.8,31 38,31 Z" />
+
+    <!-- 2. Outer border of the card to define the file sheet structure -->
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="3"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:fillColor="#00000000"
+        android:pathData="M 38,31 L 64,31 L 74,41 L 74,73 C 74,75.2 72.2,77 70,77 L 38,77 C 35.8,77 34,75.2 34,73 L 34,35 C 34,32.8 35.8,31 38,31 Z" />
+
+    <!-- 3. Fold helper lines at the top-right corner -->
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:fillColor="#4DFFFFFF"
+        android:pathData="M 64,31 L 64,41 L 74,41 Z" />
+
+    <!-- 4. Metadata content markers inside the file (lines that represent Exif data)-->
+    <!-- Top data line -->
+    <path
+        android:strokeColor="#80FFFFFF"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:pathData="M 42,47 L 54,47" />
+
+    <!-- Second data line, partially faded -->
+    <path
+        android:strokeColor="#50FFFFFF"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:pathData="M 42,54 L 48,54" />
+
+    <!-- Fourth data line at the bottom -->
+    <path
+        android:strokeColor="#80FFFFFF"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:pathData="M 42,68 L 66,68" />
+
+    <!-- 5. Dynamic sweeping trail swoosh (brooms dust and metadata) -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M 28,75 Q 36,54 84,28 Q 72,42 28,75 Z" />
+
+    <!-- 6. Gorgeous Sparkle 1 (Large, clean brilliance effect, centered at x=54, y=42) -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M 54,34 Q 54,42 46,42 Q 54,42 54,50 Q 54,42 62,42 Q 54,42 54,34 Z" />
+
+    <!-- 7. Gorgeous Sparkle 2 (Medium sparkle near the bottom of the sweep, centered at x=70, y=60) -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M 70,54 Q 70,60 64,60 Q 70,60 70,66 Q 70,60 76,60 Q 70,60 70,54 Z" />
+
+    <!-- 8. Sparkle 3 (Small sparkle near the bottom-left, centered at x=32, y=60) -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M 32,56 Q 32,60 28,60 Q 32,60 32,64 Q 32,60 36,60 Q 32,60 32,56 Z" />
+
+</vector>

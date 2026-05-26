@@ -1,0 +1,6 @@
+{
+  "name": "CleanShare",
+  "description": "Remove hidden details, location tags, and device information from your photos and files before sharing them.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
