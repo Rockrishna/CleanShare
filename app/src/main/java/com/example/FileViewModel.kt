@@ -92,6 +92,10 @@ class FileViewModel : ViewModel() {
         }
     }
 
+    fun resetShareState() {
+        _shareState.value = ShareState.Idle
+    }
+
     fun loadUris(context: Context, uris: List<Uri>) {
         if (uris.isEmpty()) return
 

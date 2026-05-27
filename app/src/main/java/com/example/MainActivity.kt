@@ -211,6 +211,8 @@ fun MainContentScreen(
                 context.startActivity(chooser)
             } catch (e: Exception) {
                 Toast.makeText(context, "Sharing failed: ${e.message}", Toast.LENGTH_LONG).show()
+            } finally {
+                viewModel.resetShareState()
             }
         }
     }
