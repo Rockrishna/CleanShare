@@ -53,6 +53,15 @@ class FileViewModel : ViewModel() {
     val batchBaseName = MutableStateFlow("")
     val startNumber = MutableStateFlow("1")
 
+    // Global App Preferences / Settings States
+    val useDynamicTheming = MutableStateFlow(true)
+    val defaultScrubGps = MutableStateFlow(true)
+    val defaultScrubCamera = MutableStateFlow(true)
+    val defaultScrubDateTime = MutableStateFlow(true)
+    val defaultScrubAll = MutableStateFlow(true)
+    val autoRenameSafeHashes = MutableStateFlow(false)
+    val lowercaseExtensions = MutableStateFlow(true)
+
     fun clearFiles(context: Context) {
         viewModelScope.launch(Dispatchers.IO) {
             _loadingState.value = LoadingState.Loading
@@ -106,7 +115,13 @@ class FileViewModel : ViewModel() {
             withContext(Dispatchers.IO) {
                 uris.forEachIndexed { index, uri ->
                     try {
-                        val originalName = getFileNameFromUri(context, uri) ?: "shared_file_${System.currentTimeMillis()}_$index"
+                        var originalName = getFileNameFromUri(context, uri) ?: "shared_file_${System.currentTimeMillis()}_$index"
+                        if (lowercaseExtensions.value) {
+                            val ext = originalName.substringAfterLast('.', "")
+                            if (ext.isNotEmpty()) {
+                                originalName = originalName.substringBeforeLast('.', originalName) + "." + ext.lowercase()
+                            }
+                        }
                         val mimeType = context.contentResolver.getType(uri) ?: getMimeTypeFromExtension(originalName)
                         val size = getFileSizeFromUri(context, uri)
 
@@ -151,10 +166,10 @@ class FileViewModel : ViewModel() {
                                     val exif = ExifInterface(cacheFile.absolutePath)
                                     hasExif = true
                                     
-                                    val latLong = FloatArray(2)
-                                    if (exif.getLatLong(latLong)) {
-                                        gpsLat = latLong[0].toDouble()
-                                        gpsLong = latLong[1].toDouble()
+                                    val latLong = exif.latLong
+                                    if (latLong != null && latLong.size >= 2) {
+                                        gpsLat = latLong[0]
+                                        gpsLong = latLong[1]
                                     }
                                     
                                     dt = exif.getAttribute(ExifInterface.TAG_DATETIME) ?: 
@@ -186,7 +201,11 @@ class FileViewModel : ViewModel() {
                                     cameraModel = model,
                                     software = sw,
                                     artist = art,
-                                    userComment = comment
+                                    userComment = comment,
+                                    optionScrubGps = defaultScrubGps.value,
+                                    optionScrubCamera = defaultScrubCamera.value,
+                                    optionScrubDateTime = defaultScrubDateTime.value,
+                                    optionScrubAll = defaultScrubAll.value
                                 )
                             )
                         }
@@ -240,6 +259,30 @@ class FileViewModel : ViewModel() {
 
     fun toggleScrubAll(id: String, value: Boolean) {
         _files.value = _files.value.map { if (it.id == id) it.copy(optionScrubAll = value) else it }
+    }
+
+    fun toggleBatchScrubGps(value: Boolean) {
+        defaultScrubGps.value = value
+        _files.value = _files.value.map { if (it.hasExif) it.copy(optionScrubGps = value) else it }
+    }
+
+    fun toggleBatchScrubCamera(value: Boolean) {
+        defaultScrubCamera.value = value
+        _files.value = _files.value.map { if (it.hasExif) it.copy(optionScrubCamera = value) else it }
+    }
+
+    fun toggleBatchScrubDateTime(value: Boolean) {
+        defaultScrubDateTime.value = value
+        _files.value = _files.value.map { if (it.hasExif) it.copy(optionScrubDateTime = value) else it }
+    }
+
+    fun toggleBatchScrubAll(value: Boolean) {
+        defaultScrubAll.value = value
+        _files.value = _files.value.map { if (it.hasExif) it.copy(optionScrubAll = value) else it }
+    }
+
+    fun resetBatchFilenames() {
+        _files.value = _files.value.map { it.copy(currentName = it.originalName) }
     }
 
     fun updateCustomArtist(id: String, artist: String?) {
@@ -360,6 +403,19 @@ class FileViewModel : ViewModel() {
     fun processAndPrepareShare(context: Context) {
         if (_files.value.isEmpty()) return
 
+        // Auto-apply active bulk renaming parameters if configure fields are not empty
+        if (findText.value.isNotEmpty()) {
+            applyBatchFindAndReplace()
+        }
+        val prefix = batchPrefix.value.trim()
+        val suffix = batchSuffix.value.trim()
+        if (prefix.isNotEmpty() || suffix.isNotEmpty()) {
+            applyBatchPrefixSuffix()
+        }
+        if (batchBaseName.value.trim().isNotEmpty()) {
+            applyBatchSequentialRenaming()
+        }
+
         _shareState.value = ShareState.Processing
 
         viewModelScope.launch {
@@ -378,8 +434,15 @@ class FileViewModel : ViewModel() {
                     _files.value.forEach { item ->
                         val originalFile = File(item.localCachedPath)
                         if (originalFile.exists()) {
-                            // Target location using the user's custom currentName
-                            val targetFile = File(processedDir, item.currentName)
+                            // Target location using the user's custom currentName or safe random hash
+                            val finalShareName = if (autoRenameSafeHashes.value) {
+                                val ext = item.extension
+                                val randomHash = "clean_" + java.util.UUID.randomUUID().toString().take(8)
+                                if (ext.isNotEmpty()) "$randomHash.$ext" else randomHash
+                            } else {
+                                item.currentName
+                            }
+                            val targetFile = File(processedDir, finalShareName)
                             
                             // Copy bytes to target destination
                             originalFile.inputStream().use { input ->

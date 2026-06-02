@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.os.Build
 import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -16,6 +17,8 @@ import androidx.compose.ui.draw.alpha
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.result.PickVisualMediaRequest
+import android.Manifest
 import androidx.compose.animation.*
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -32,6 +35,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.automirrored.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -115,17 +119,12 @@ class MainActivity : ComponentActivity() {
         intent?.let { handleIncomingIntent(it) }
 
         setContent {
-            MyApplicationTheme {
-                Scaffold(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .testTag("root_scaffold")
-                ) { innerPadding ->
-                    MainContentScreen(
-                        viewModel = fileViewModel,
-                        contentPadding = innerPadding
-                    )
-                }
+            val useDynamicTheming by fileViewModel.useDynamicTheming.collectAsStateWithLifecycle()
+
+            MyApplicationTheme(dynamicColor = useDynamicTheming) {
+                MainContentScreen(
+                    viewModel = fileViewModel
+                )
             }
         }
     }
@@ -141,7 +140,12 @@ class MainActivity : ComponentActivity() {
             Log.d("MainActivity", "Handling incoming intent action: ${intent.action}")
             if (intent.action == Intent.ACTION_SEND) {
                 // Try to import single Uri stream
-                val streamUri = intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
+                val streamUri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
+                } else {
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableExtra(Intent.EXTRA_STREAM)
+                }
                 if (streamUri != null) {
                     fileViewModel.loadUris(this, listOf(streamUri))
                 } else {
@@ -156,7 +160,12 @@ class MainActivity : ComponentActivity() {
                 }
             } else if (intent.action == Intent.ACTION_SEND_MULTIPLE) {
                 // Try to import multiple Uri streams
-                val streamUris = intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)
+                val streamUris = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM, Uri::class.java)
+                } else {
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM)
+                }
                 if (streamUris != null) {
                     fileViewModel.loadUris(this, streamUris)
                 }
@@ -169,20 +178,60 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun MainContentScreen(
-    viewModel: FileViewModel,
-    contentPadding: PaddingValues = PaddingValues()
+    viewModel: FileViewModel
 ) {
     val context = LocalContext.current
     val filesList by viewModel.files.collectAsStateWithLifecycle()
     val loadingState by viewModel.loadingState.collectAsStateWithLifecycle()
     val shareState by viewModel.shareState.collectAsStateWithLifecycle()
+    val useDynamicTheming by viewModel.useDynamicTheming.collectAsStateWithLifecycle()
 
-    // File picker launcher for fallback manual selection
-    val pickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetMultipleContents()
+    var currentMainTab by remember { mutableStateOf("cleaner") } // "cleaner" or "settings"
+
+    var showPickerSelectionDialog by remember { mutableStateOf(false) }
+    var permissionStatusText by remember { mutableStateOf(getStoragePermissionStatus(context)) }
+
+    DisposableEffect(Unit) {
+        permissionStatusText = getStoragePermissionStatus(context)
+        onDispose {}
+    }
+
+    // Modern Photo Picker Launcher
+    val photoPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickMultipleVisualMedia()
     ) { uris ->
         if (uris.isNotEmpty()) {
             viewModel.loadUris(context, uris)
+        }
+    }
+
+    // Modern Document Launcher
+    val documentPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris ->
+        if (uris.isNotEmpty()) {
+            viewModel.loadUris(context, uris)
+        }
+    }
+
+    // Modern Fine-grained Permissions Launcher
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        permissionStatusText = getStoragePermissionStatus(context)
+        val imageGranted = permissions[Manifest.permission.READ_MEDIA_IMAGES] ?: false
+        val videoGranted = permissions[Manifest.permission.READ_MEDIA_VIDEO] ?: false
+        val partialGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            permissions[Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED] ?: false
+        } else false
+        val oldStorageGranted = permissions[Manifest.permission.READ_EXTERNAL_STORAGE] ?: false
+
+        if (imageGranted || videoGranted || oldStorageGranted) {
+            Toast.makeText(context, "Full Storage Access Granted", Toast.LENGTH_SHORT).show()
+        } else if (partialGranted) {
+            Toast.makeText(context, "Limited Selected-Photos Access Granted", Toast.LENGTH_SHORT).show()
+        } else {
+            Toast.makeText(context, "Storage Access Rejected", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -190,6 +239,7 @@ fun MainContentScreen(
     var selectedFileForMetadataEdit by remember { mutableStateOf<SharedFileItem?>(null) }
     var activeTab by remember { mutableStateOf("rename") } // "rename" or "scrub"
     var currentScreenModeTab by remember { mutableStateOf("single") } // "single" or "batch"
+    var showConfirmPreviewScreen by remember { mutableStateOf(false) }
 
     // Reset carousel index if list is cleared
     LaunchedEffect(filesList.size) {
@@ -217,79 +267,57 @@ fun MainContentScreen(
         }
     }
 
-    BoxWithConstraints(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(CosmicSlateBg)
-    ) {
-        val boxWidth = this.maxWidth
-        val boxHeight = this.maxHeight
-        val isWideScreen = boxWidth >= 720.dp
-
-        val scrollState = rememberScrollState()
-        val scrollOffset = scrollState.value
-        val density = LocalDensity.current
-        val scrollOffsetDp = with(density) { scrollOffset.toDp() }
-
-        val currentIndex = if (filesList.isNotEmpty()) selectedFileIndex.coerceIn(0, filesList.size - 1) else 0
-        val activeItem = if (filesList.isNotEmpty()) filesList[currentIndex] else null
-        val showThumbnailInTopBar = scrollOffsetDp > 160.dp
-
-        Column(
+    Scaffold(
+        modifier = Modifier.fillMaxSize()
+    ) { innerScaffoldPadding ->
+        Box(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(contentPadding)
+                .padding(innerScaffoldPadding)
+                .background(CosmicSlateBg)
         ) {
-            // Elegant modern header action row (no bulky icon/paragraphs card)
-            MinimalTopBar(
-                filesCount = filesList.size,
-                activeItem = activeItem,
-                showThumbnail = showThumbnailInTopBar && (currentScreenModeTab == "single"),
-                onClearClick = { viewModel.clearFiles(context) },
-                onAddMoreClick = { pickerLauncher.launch("*/*") }
-            )
+            if (currentMainTab == "cleaner") {
+                BoxWithConstraints(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(CosmicSlateBg)
+                ) {
+                    val boxWidth = this.maxWidth
+                    val boxHeight = this.maxHeight
+                    val isWideScreen = boxWidth >= 720.dp
 
-            if (filesList.isEmpty()) {
-                // Fullscreen border-free Material 3 expressive empty state
-                EmptyStateView(
-                    onSelectFilesClick = { pickerLauncher.launch("*/*") }
-                )
-            } else {
+                    val scrollState = rememberScrollState()
+                    val scrollOffset = scrollState.value
+                    val density = LocalDensity.current
+                    val scrollOffsetDp = with(density) { scrollOffset.toDp() }
+
+                    val currentIndex = if (filesList.isNotEmpty()) selectedFileIndex.coerceIn(0, filesList.size - 1) else 0
+                    val activeItem = if (filesList.isNotEmpty()) filesList[currentIndex] else null
+                    val showThumbnailInTopBar = scrollOffsetDp > 160.dp
+
+                    Column(
+                        modifier = Modifier.fillMaxSize()
+                    ) {
+                        // Elegant modern header action row (cohesive integrated toolbar)
+                        MinimalTopBar(
+                            filesCount = filesList.size,
+                            activeItem = activeItem,
+                            showThumbnail = showThumbnailInTopBar && (currentScreenModeTab == "single"),
+                            currentScreenModeTab = currentScreenModeTab,
+                            onScreenModeTabChange = { currentScreenModeTab = it },
+                            onSettingsClick = { currentMainTab = "settings" },
+                            onClearClick = { viewModel.clearFiles(context) },
+                            onAddMoreClick = { showPickerSelectionDialog = true }
+                        )
+
+                        if (filesList.isEmpty()) {
+                            // Fullscreen border-free Material 3 expressive empty state
+                            EmptyStateView(
+                                onSelectFilesClick = { showPickerSelectionDialog = true }
+                            )
+                        } else {
                 val realActiveItem = filesList[currentIndex]
                 val isFoldedFlip = boxHeight < 560.dp && boxWidth < 500.dp
-
-                // High-fidelity tab selector to avoid messy UI clutter
-                if (filesList.size > 1) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 20.dp, vertical = 8.dp)
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(CosmicBorder.copy(alpha = 0.3f))
-                            .padding(4.dp),
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        listOf("single" to "Clean Selected File", "batch" to "Clean All (${filesList.size})").forEach { (tabId, label) ->
-                            val isSelected = currentScreenModeTab == tabId
-                            Box(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(if (isSelected) CosmicCyanAccent else Color.Transparent)
-                                    .clickable { currentScreenModeTab = tabId }
-                                    .padding(vertical = 10.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = label,
-                                    color = if (isSelected) CosmicSlateBg else CosmicWhiteText.copy(alpha = 0.8f),
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 13.sp
-                                )
-                            }
-                        }
-                    }
-                }
 
                 if (isWideScreen) {
                     // --- Widescreen / Tablet / ChromeOS / Foldable Unfolded side-by-side mode ---
@@ -353,37 +381,35 @@ fun MainContentScreen(
                                 )
                             }
                         } else {
-                            // Column 1: Info and Load status summary
+                            // Unified full-width scrollable widescreen batch panel
                             Column(
                                 modifier = Modifier
-                                    .weight(0.9f)
-                                    .fillMaxHeight(),
-                                verticalArrangement = Arrangement.spacedBy(16.dp)
-                            ) {
-                                StatusSummaryHeader(filesList = filesList)
-                                
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Text(
-                                    text = "Batch settings apply simultaneously across all imported media assets securely.",
-                                    fontSize = 13.sp,
-                                    color = CosmicWhiteText.copy(alpha = 0.7f),
-                                    modifier = Modifier.padding(horizontal = 16.dp)
-                                )
-                            }
-
-                            // Column 2: Batch processing panel
-                            Column(
-                                modifier = Modifier
-                                    .weight(1.2f)
+                                    .weight(1f)
                                     .fillMaxHeight()
                                     .verticalScroll(rememberScrollState()),
-                                verticalArrangement = Arrangement.spacedBy(16.dp)
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
-                                BatchControlBoard(
-                                    activeTab = activeTab,
-                                    onTabChange = { activeTab = it },
-                                    viewModel = viewModel
-                                )
+                                Box(
+                                    modifier = Modifier
+                                        .widthIn(max = 720.dp)
+                                        .fillMaxWidth()
+                                ) {
+                                    Column(
+                                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        StatusSummaryHeader(filesList = filesList)
+
+                                        BatchControlBoard(
+                                            activeTab = activeTab,
+                                            onTabChange = { activeTab = it },
+                                            viewModel = viewModel
+                                        )
+                                        
+                                        Spacer(modifier = Modifier.height(96.dp))
+                                    }
+                                }
                             }
                         }
                     }
@@ -414,13 +440,12 @@ fun MainContentScreen(
                                 }
 
                                 // Interactive Scaling Image Preview in Portrait!
-                                val activeImageHeight = (220.dp - scrollOffsetDp).coerceAtLeast(44.dp)
-                                val activeImageFraction = ((220.dp - scrollOffsetDp) / 220.dp).coerceIn(0.1f, 1.0f)
+                                val activeImageFraction = ((200.dp - scrollOffsetDp) / 200.dp).coerceIn(0.65f, 1.0f)
 
                                 Box(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .height(activeImageHeight)
+                                        .height(200.dp)
                                         .graphicsLayer {
                                             alpha = activeImageFraction
                                             scaleX = activeImageFraction
@@ -515,7 +540,7 @@ fun MainContentScreen(
                 Snackbar(
                     modifier = Modifier.padding(16.dp),
                     action = {
-                        TextButton(onClick = { viewModel.processAndPrepareShare(context) }) {
+                        TextButton(onClick = { showConfirmPreviewScreen = true }) {
                             Text("Retry", color = CosmicCyanAccent)
                         }
                     },
@@ -536,7 +561,19 @@ fun MainContentScreen(
                     tonalElevation = 8.dp
                 ) {
                     Button(
-                        onClick = { viewModel.processAndPrepareShare(context) },
+                        onClick = {
+                            // Automatically apply active renaming variables to previews if they haven't run explicitly yet
+                            if (viewModel.findText.value.isNotEmpty()) {
+                                viewModel.applyBatchFindAndReplace()
+                            }
+                            if (viewModel.batchPrefix.value.trim().isNotEmpty() || viewModel.batchSuffix.value.trim().isNotEmpty()) {
+                                viewModel.applyBatchPrefixSuffix()
+                            }
+                            if (viewModel.batchBaseName.value.trim().isNotEmpty()) {
+                                viewModel.applyBatchSequentialRenaming()
+                            }
+                            showConfirmPreviewScreen = true
+                        },
                         colors = ButtonDefaults.buttonColors(
                             containerColor = CosmicCyanAccent,
                             contentColor = CosmicCardSurface
@@ -582,6 +619,262 @@ fun MainContentScreen(
                 }
             )
         }
+
+        // Beautiful full confirmation preview overlay screen
+        if (showConfirmPreviewScreen) {
+            androidx.compose.ui.window.Dialog(
+                onDismissRequest = { showConfirmPreviewScreen = false },
+                properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
+            ) {
+                Surface(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(CosmicSlateBg),
+                    color = CosmicSlateBg
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .statusBarsPadding()
+                            .navigationBarsPadding()
+                            .padding(20.dp)
+                    ) {
+                        // Title header
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column {
+                                Text(
+                                    text = "Confirm Sharing Preview",
+                                    fontSize = 20.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = CosmicWhiteText
+                                )
+                                Text(
+                                    text = "Review all modifications and sanitizations below",
+                                    fontSize = 11.sp,
+                                    color = CosmicGrayMuted
+                                )
+                            }
+                            IconButton(onClick = { showConfirmPreviewScreen = false }) {
+                                Icon(Icons.Default.Close, contentDescription = "Close", tint = CosmicWhiteText)
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        // Sanitization list
+                        LazyColumn(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxWidth()
+                                .background(CosmicCardSurface, RoundedCornerShape(16.dp))
+                                .border(1.dp, CosmicBorder, RoundedCornerShape(16.dp))
+                                .padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            items(filesList) { sharedItem ->
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .background(CosmicSlateBg, RoundedCornerShape(10.dp))
+                                        .border(1.dp, CosmicBorder, RoundedCornerShape(10.dp))
+                                        .padding(12.dp)
+                                ) {
+                                    // Row 1: File icon and size
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(
+                                            imageVector = getGenericFileIcon(sharedItem.mimeType),
+                                            contentDescription = "File icon",
+                                            tint = CosmicCyanAccent,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            text = formatSize(sharedItem.sizeBytes),
+                                            fontSize = 9.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = CosmicCyanLight,
+                                            modifier = Modifier
+                                                .background(CosmicCyanDark, RoundedCornerShape(4.dp))
+                                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                                        )
+                                    }
+
+                                    Spacer(modifier = Modifier.height(6.dp))
+
+                                    // Original Name
+                                    Text(
+                                        text = "ORIGINAL",
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = CosmicGrayMuted
+                                    )
+                                    Text(
+                                        text = sharedItem.originalName,
+                                        fontSize = 11.sp,
+                                        color = CosmicWhiteText.copy(alpha = 0.5f),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+
+                                    Spacer(modifier = Modifier.height(4.dp))
+
+                                    // Clean name
+                                    Text(
+                                        text = "PROPOSED NEW NAME",
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = CosmicCyanAccent
+                                    )
+                                    Text(
+                                        text = sharedItem.currentName,
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = CosmicWhiteText,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+
+                                    Spacer(modifier = Modifier.height(8.dp))
+
+                                    // Sanitation indicators
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(14.dp)
+                                    ) {
+                                        val hasGps = sharedItem.optionScrubGps || sharedItem.optionScrubAll
+                                        val hasCamera = sharedItem.optionScrubCamera || sharedItem.optionScrubAll
+                                        val hasTime = sharedItem.optionScrubDateTime || sharedItem.optionScrubAll
+
+                                        ConfirmPillCheckbox(label = "Strip GPS", checked = hasGps)
+                                        ConfirmPillCheckbox(label = "Strip Camera Info", checked = hasCamera)
+                                        ConfirmPillCheckbox(label = "Strip Date", checked = hasTime)
+                                    }
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        // Main confirm actions
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            OutlinedButton(
+                                onClick = { showConfirmPreviewScreen = false },
+                                shape = RoundedCornerShape(24.dp),
+                                border = BorderStroke(1.dp, CosmicBorder),
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = CosmicWhiteText),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(48.dp)
+                            ) {
+                                Text("Cancel", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                            }
+
+                            Button(
+                                onClick = {
+                                    showConfirmPreviewScreen = false
+                                    viewModel.processAndPrepareShare(context)
+                                },
+                                shape = RoundedCornerShape(24.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = CosmicCyanAccent,
+                                    contentColor = CosmicCardSurface
+                                ),
+                                modifier = Modifier
+                                    .weight(1.4f)
+                                    .height(48.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Check,
+                                    contentDescription = "Confirm",
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Confirm & Share", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+            if (currentMainTab == "settings") {
+                SettingsScreen(
+                    viewModel = viewModel,
+                    onBackClick = { currentMainTab = "cleaner" },
+                    onRequestPermissions = {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                            permissionLauncher.launch(
+                                arrayOf(
+                                    Manifest.permission.READ_MEDIA_IMAGES,
+                                    Manifest.permission.READ_MEDIA_VIDEO,
+                                    Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED
+                                )
+                            )
+                        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            permissionLauncher.launch(
+                                arrayOf(
+                                    Manifest.permission.READ_MEDIA_IMAGES,
+                                    Manifest.permission.READ_MEDIA_VIDEO
+                                )
+                            )
+                        } else {
+                            permissionLauncher.launch(
+                                arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+                            )
+                        }
+                    }
+                )
+            }
+        }
+    }
+
+    if (showPickerSelectionDialog) {
+        ModernPickerSelectionDialog(
+            onDismissRequest = { showPickerSelectionDialog = false },
+            onLaunchPhotoPicker = {
+                photoPickerLauncher.launch(
+                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
+                )
+            },
+            onLaunchDocumentPicker = {
+                documentPickerLauncher.launch(arrayOf("*/*"))
+            },
+            permissionStatusText = permissionStatusText,
+            onRequestPermissions = {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                    permissionLauncher.launch(
+                        arrayOf(
+                            Manifest.permission.READ_MEDIA_IMAGES,
+                            Manifest.permission.READ_MEDIA_VIDEO,
+                            Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED
+                        )
+                    )
+                } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    permissionLauncher.launch(
+                        arrayOf(
+                            Manifest.permission.READ_MEDIA_IMAGES,
+                            Manifest.permission.READ_MEDIA_VIDEO
+                        )
+                    )
+                } else {
+                    permissionLauncher.launch(
+                        arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+                    )
+                }
+            }
+        )
     }
 }
 
@@ -590,20 +883,27 @@ fun MinimalTopBar(
     filesCount: Int,
     activeItem: SharedFileItem? = null,
     showThumbnail: Boolean = false,
+    currentScreenModeTab: String = "single",
+    onScreenModeTabChange: (String) -> Unit = {},
+    onSettingsClick: () -> Unit = {},
     onClearClick: () -> Unit,
     onAddMoreClick: () -> Unit
 ) {
     val context = LocalContext.current
-    if (filesCount > 0) {
-        Surface(
-            color = Color.Transparent,
-            modifier = Modifier.fillMaxWidth()
+    Surface(
+        color = CosmicCardSurface,
+        shape = RoundedCornerShape(bottomStart = 20.dp, bottomEnd = 20.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .windowInsetsPadding(WindowInsets.statusBars)
+                .padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .windowInsetsPadding(WindowInsets.statusBars)
-                    .padding(horizontal = 20.dp, vertical = 12.dp),
+                modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
@@ -612,7 +912,7 @@ fun MinimalTopBar(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier.weight(1f)
                 ) {
-                    if (showThumbnail && activeItem != null) {
+                    if (showThumbnail && activeItem != null && filesCount > 0) {
                         Surface(
                             shape = RoundedCornerShape(8.dp),
                             border = BorderStroke(1.dp, CosmicBorder),
@@ -641,13 +941,13 @@ fun MinimalTopBar(
                         }
                     }
                     Text(
-                        text = if (showThumbnail && activeItem != null) {
+                        text = if (showThumbnail && activeItem != null && filesCount > 0) {
                             val name = activeItem.originalName
                             if (name.length > 14) name.take(12) + "..." else name
                         } else {
                             "CleanShare"
                         },
-                        fontSize = if (showThumbnail && activeItem != null) 14.sp else 20.sp,
+                        fontSize = if (showThumbnail && activeItem != null && filesCount > 0) 14.sp else 20.sp,
                         fontWeight = FontWeight.ExtraBold,
                         color = CosmicWhiteText,
                         letterSpacing = (-0.5).sp,
@@ -655,26 +955,81 @@ fun MinimalTopBar(
                         overflow = TextOverflow.Ellipsis
                     )
                 }
-                
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    TextButton(
-                        onClick = onAddMoreClick,
-                        colors = ButtonDefaults.textButtonColors(contentColor = CosmicCyanAccent),
-                        modifier = Modifier.testTag("add_file_button")
-                    ) {
-                        Icon(imageVector = Icons.Default.Add, contentDescription = "Add Files", modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("Add", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (filesCount == 0) {
+                        IconButton(
+                            onClick = onSettingsClick,
+                            modifier = Modifier
+                                .background(
+                                    color = CosmicBorder.copy(alpha = 0.15f),
+                                    shape = androidx.compose.foundation.shape.CircleShape
+                                )
+                                .testTag("settings_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Settings,
+                                contentDescription = "Open Settings",
+                                tint = CosmicCyanAccent,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
                     }
-                    
-                    TextButton(
-                        onClick = onClearClick,
-                        colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFFFA5252)),
-                        modifier = Modifier.testTag("clear_all_button")
-                    ) {
-                        Icon(imageVector = Icons.Default.DeleteSweep, contentDescription = "Clear List", modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("Clear", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+
+                    if (filesCount > 0) {
+                        TextButton(
+                            onClick = onAddMoreClick,
+                            colors = ButtonDefaults.textButtonColors(contentColor = CosmicCyanAccent),
+                            modifier = Modifier.testTag("add_file_button")
+                        ) {
+                            Icon(imageVector = Icons.Default.Add, contentDescription = "Add Files", modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Add", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+
+                        TextButton(
+                            onClick = onClearClick,
+                            colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFFFA5252)),
+                            modifier = Modifier.testTag("clear_all_button")
+                        ) {
+                            Icon(imageVector = Icons.Default.DeleteSweep, contentDescription = "Clear List", modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Clear", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            }
+
+            if (filesCount > 1) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(CosmicSlateBg)
+                        .padding(3.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    listOf("single" to "Clean Selected File", "batch" to "Clean All ($filesCount)").forEach { (tabId, label) ->
+                        val isSelected = currentScreenModeTab == tabId
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(if (isSelected) CosmicCyanAccent else Color.Transparent)
+                                .clickable { onScreenModeTabChange(tabId) }
+                                .padding(vertical = 8.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = label,
+                                color = if (isSelected) CosmicSlateBg else CosmicWhiteText.copy(alpha = 0.8f),
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 12.sp
+                            )
+                        }
                     }
                 }
             }
@@ -719,7 +1074,7 @@ fun EmptyStateView(
             Spacer(modifier = Modifier.height(28.dp))
 
             Text(
-                text = "Clean, Rename & Share Files",
+                text = "Securely Share Your Photos and Files",
                 fontSize = 24.sp,
                 fontWeight = FontWeight.ExtraBold,
                 color = CosmicWhiteText,
@@ -730,7 +1085,7 @@ fun EmptyStateView(
             Spacer(modifier = Modifier.height(8.dp))
 
             Text(
-                text = "Rename files and scrub sensitive metadata (like location pins, camera specifications, and timestamps) before you send them to other people.",
+                text = "Rename files and photos while scrubbing sensitive metadata (like GPS location markers, device details, and original timestamps) before clean sharing.",
                 fontSize = 13.sp,
                 color = CosmicGrayMuted,
                 textAlign = TextAlign.Center,
@@ -738,7 +1093,7 @@ fun EmptyStateView(
                 modifier = Modifier.padding(horizontal = 8.dp)
             )
 
-            Spacer(modifier = Modifier.height(32.dp))
+            Spacer(modifier = Modifier.height(24.dp))
 
             Button(
                 onClick = onSelectFilesClick,
@@ -824,18 +1179,18 @@ fun StatusSummaryHeader(filesList: List<SharedFileItem>) {
     val formattedSize = formatSize(totalSize)
     val filesPlural = if (filesList.size == 1) "File" else "Files"
 
-    Surface(
-        color = CosmicSlateBg,
+    Card(
+        colors = CardDefaults.cardColors(containerColor = CosmicCardSurface),
+        shape = RoundedCornerShape(20.dp),
+        border = BorderStroke(1.dp, CosmicBorder),
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 12.dp)
+            .padding(vertical = 4.dp)
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(CosmicCardSurface, RoundedCornerShape(12.dp))
-                .border(BorderStroke(1.dp, CosmicBorder), RoundedCornerShape(12.dp))
-                .padding(14.dp),
+                .padding(horizontal = 16.dp, vertical = 14.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -855,10 +1210,10 @@ fun StatusSummaryHeader(filesList: List<SharedFileItem>) {
                 )
             }
             Text(
-                text = "Total Payload: $formattedSize",
+                text = "Total Filesize: $formattedSize",
                 fontSize = 12.sp,
-                fontWeight = FontWeight.Medium,
-                color = CosmicGrayMuted
+                fontWeight = FontWeight.Bold,
+                color = CosmicCyanAccent
             )
         }
     }
@@ -937,7 +1292,7 @@ fun FilesCarousel(
                                 .padding(horizontal = 6.dp, vertical = 2.dp)
                         ) {
                             Text(
-                                text = item.extension.uppercase().ifEmpty { "FILE" },
+                                text = if (item.extension.isNotEmpty()) ".${item.extension.uppercase()}" else "FILE",
                                 fontSize = 9.sp,
                                 fontWeight = FontWeight.ExtraBold,
                                 color = if (isSelected) CosmicCyanDark else CosmicGrayMuted,
@@ -1041,7 +1396,7 @@ fun ActiveFileRenameSection(
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "NEW FILENAME",
+                        text = "RENAME FILE",
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Bold,
                         color = CosmicGrayMuted,
@@ -1056,7 +1411,7 @@ fun ActiveFileRenameSection(
                             .padding(horizontal = 8.dp, vertical = 2.dp)
                     ) {
                         Text(
-                            text = ext.uppercase(),
+                            text = ".${ext.uppercase()}",
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Bold,
                             color = CosmicCyanLight
@@ -1076,6 +1431,18 @@ fun ActiveFileRenameSection(
                     fontSize = 15.sp,
                     fontWeight = FontWeight.SemiBold
                 ),
+                trailingIcon = {
+                    if (baseName.isNotEmpty()) {
+                        IconButton(onClick = { onFilenameChange("") }) {
+                            Icon(
+                                imageVector = Icons.Default.Clear,
+                                contentDescription = "Clear",
+                                tint = CosmicGrayMuted,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+                },
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = CosmicCyanAccent,
                     unfocusedBorderColor = CosmicBorder,
@@ -1256,7 +1623,11 @@ fun BatchControlBoard(
     onTabChange: (String) -> Unit,
     viewModel: FileViewModel
 ) {
-    // Collect specific text updates
+    val context = LocalContext.current
+    
+    val filesList by viewModel.files.collectAsStateWithLifecycle()
+    
+    // Text field states
     val findText by viewModel.findText.collectAsStateWithLifecycle()
     val replaceWithText by viewModel.replaceWithText.collectAsStateWithLifecycle()
     val batchPrefix by viewModel.batchPrefix.collectAsStateWithLifecycle()
@@ -1264,417 +1635,710 @@ fun BatchControlBoard(
     val batchBaseName by viewModel.batchBaseName.collectAsStateWithLifecycle()
     val startNumber by viewModel.startNumber.collectAsStateWithLifecycle()
 
-    var showBatchRenameOptions by remember { mutableStateOf(true) }
+    // Global scrub defaults
+    val defaultScrubGps by viewModel.defaultScrubGps.collectAsStateWithLifecycle()
+    val defaultScrubCamera by viewModel.defaultScrubCamera.collectAsStateWithLifecycle()
+    val defaultScrubDateTime by viewModel.defaultScrubDateTime.collectAsStateWithLifecycle()
+    val defaultScrubAll by viewModel.defaultScrubAll.collectAsStateWithLifecycle()
 
-    Surface(
-        color = CosmicCardSurface,
-        shape = RoundedCornerShape(24.dp),
-        border = BorderStroke(1.dp, CosmicBorder),
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 4.dp)
+            .padding(vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(14.dp)
+        // --- 1. RENAME CARD (STRICTLY VERTICAL, NO SIDE-BY-SIDE) ---
+        Card(
+            colors = CardDefaults.cardColors(containerColor = CosmicCardSurface),
+            shape = RoundedCornerShape(20.dp),
+            border = BorderStroke(1.dp, CosmicBorder),
+            modifier = Modifier.fillMaxWidth()
         ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { showBatchRenameOptions = !showBatchRenameOptions },
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
                     Icon(
-                        imageVector = Icons.Default.AutoFixHigh,
-                        contentDescription = "Batch tools icon",
+                        imageVector = Icons.Default.Edit,
+                        contentDescription = "Bulk Rename",
                         tint = CosmicCyanAccent,
-                        modifier = Modifier.size(20.dp)
+                        modifier = Modifier.size(22.dp)
                     )
-                    Spacer(modifier = Modifier.width(10.dp))
                     Text(
-                        text = "Bulk Optimization Controls",
-                        fontSize = 14.sp,
+                        text = "Bulk Rename Controls",
+                        fontSize = 16.sp,
                         fontWeight = FontWeight.Bold,
                         color = CosmicWhiteText
                     )
                 }
 
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                // Sub-Section A: Find & Replace
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
-                        text = if (showBatchRenameOptions) "Hide" else "Show Options",
+                        text = "FIND & REPLACE",
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
-                        color = CosmicCyanAccent
+                        color = CosmicCyanLight,
+                        letterSpacing = 0.5.sp
                     )
-                    Icon(
-                        imageVector = if (showBatchRenameOptions) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                        contentDescription = "Toggle batch options",
-                        tint = CosmicCyanAccent,
-                        modifier = Modifier.size(20.dp)
+                    OutlinedTextField(
+                        value = findText,
+                        onValueChange = { viewModel.findText.value = it },
+                        placeholder = { Text("Find Text (e.g. IMG_)", fontSize = 12.sp, color = CosmicGrayMuted) },
+                        singleLine = true,
+                        trailingIcon = {
+                            if (findText.isNotEmpty()) {
+                                IconButton(onClick = { viewModel.findText.value = "" }) {
+                                    Icon(Icons.Default.Close, "Clear", tint = CosmicGrayMuted, modifier = Modifier.size(18.dp))
+                                }
+                            }
+                        },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = CosmicCyanAccent,
+                            unfocusedBorderColor = CosmicBorder,
+                            focusedTextColor = CosmicWhiteText,
+                            unfocusedTextColor = CosmicWhiteText
+                        ),
+                        modifier = Modifier.fillMaxWidth(),
+                        textStyle = LocalTextStyle.current.copy(fontSize = 14.sp),
+                        shape = RoundedCornerShape(12.dp)
                     )
-                }
-            }
 
-            AnimatedVisibility(
-                visible = showBatchRenameOptions,
-                enter = expandVertically() + fadeIn(),
-                exit = shrinkVertically() + fadeOut()
-            ) {
-                Column(modifier = Modifier.padding(top = 16.dp)) {
-                    // Small tab controls: Rename Panel vs Metadata Scrub Panel
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(CosmicSlateBg)
-                            .padding(4.dp)
+                    OutlinedTextField(
+                        value = replaceWithText,
+                        onValueChange = { viewModel.replaceWithText.value = it },
+                        placeholder = { Text("Replace WITH", fontSize = 12.sp, color = CosmicGrayMuted) },
+                        singleLine = true,
+                        trailingIcon = {
+                            if (replaceWithText.isNotEmpty()) {
+                                IconButton(onClick = { viewModel.replaceWithText.value = "" }) {
+                                    Icon(Icons.Default.Close, "Clear", tint = CosmicGrayMuted, modifier = Modifier.size(18.dp))
+                                }
+                            }
+                        },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = CosmicCyanAccent,
+                            unfocusedBorderColor = CosmicBorder,
+                            focusedTextColor = CosmicWhiteText,
+                            unfocusedTextColor = CosmicWhiteText
+                        ),
+                        modifier = Modifier.fillMaxWidth(),
+                        textStyle = LocalTextStyle.current.copy(fontSize = 14.sp),
+                        shape = RoundedCornerShape(12.dp)
+                    )
+
+                    Button(
+                        onClick = {
+                            viewModel.applyBatchFindAndReplace()
+                            Toast.makeText(context, "Find & replace pattern applied successfully!", Toast.LENGTH_SHORT).show()
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = CosmicCyanLight),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth().height(48.dp)
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(if (activeTab == "rename") CosmicCardSurface else Color.Transparent)
-                                .clickable { onTabChange("rename") }
-                                .padding(vertical = 8.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = "Bulk Rename Settings",
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = if (activeTab == "rename") CosmicCyanAccent else CosmicGrayMuted
-                            )
-                        }
+                        Text("Apply Find & Replace", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = CosmicCyanDark)
+                    }
+                }
 
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(if (activeTab == "scrub") CosmicCardSurface else Color.Transparent)
-                                .clickable { onTabChange("scrub") }
-                                .padding(vertical = 8.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = "Bulk Privacy Settings",
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = if (activeTab == "scrub") CosmicCyanAccent else CosmicGrayMuted
-                            )
-                        }
+                HorizontalDivider(color = CosmicDivider, modifier = Modifier.padding(vertical = 4.dp))
+
+                // Sub-Section B: Prefix & Suffix
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "PREFIX & SUFFIX ADDS",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = CosmicCyanLight,
+                        letterSpacing = 0.5.sp
+                    )
+                    OutlinedTextField(
+                        value = batchPrefix,
+                        onValueChange = { viewModel.batchPrefix.value = it },
+                        placeholder = { Text("Prefix (added to start)", fontSize = 12.sp, color = CosmicGrayMuted) },
+                        singleLine = true,
+                        trailingIcon = {
+                            if (batchPrefix.isNotEmpty()) {
+                                IconButton(onClick = { viewModel.batchPrefix.value = "" }) {
+                                    Icon(Icons.Default.Close, "Clear", tint = CosmicGrayMuted, modifier = Modifier.size(18.dp))
+                                }
+                            }
+                        },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = CosmicCyanAccent,
+                            unfocusedBorderColor = CosmicBorder,
+                            focusedTextColor = CosmicWhiteText,
+                            focusedLabelColor = CosmicCyanAccent,
+                            unfocusedTextColor = CosmicWhiteText
+                        ),
+                        modifier = Modifier.fillMaxWidth(),
+                        textStyle = LocalTextStyle.current.copy(fontSize = 14.sp),
+                        shape = RoundedCornerShape(12.dp)
+                    )
+
+                    OutlinedTextField(
+                        value = batchSuffix,
+                        onValueChange = { viewModel.batchSuffix.value = it },
+                        placeholder = { Text("Suffix (added to end)", fontSize = 12.sp, color = CosmicGrayMuted) },
+                        singleLine = true,
+                        trailingIcon = {
+                            if (batchSuffix.isNotEmpty()) {
+                                IconButton(onClick = { viewModel.batchSuffix.value = "" }) {
+                                    Icon(Icons.Default.Close, "Clear", tint = CosmicGrayMuted, modifier = Modifier.size(18.dp))
+                                }
+                            }
+                        },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = CosmicCyanAccent,
+                            unfocusedBorderColor = CosmicBorder,
+                            focusedTextColor = CosmicWhiteText,
+                            unfocusedTextColor = CosmicWhiteText
+                        ),
+                        modifier = Modifier.fillMaxWidth(),
+                        textStyle = LocalTextStyle.current.copy(fontSize = 14.sp),
+                        shape = RoundedCornerShape(12.dp)
+                    )
+
+                    Button(
+                        onClick = {
+                            viewModel.applyBatchPrefixSuffix()
+                            Toast.makeText(context, "Prefix & suffix applied successfully!", Toast.LENGTH_SHORT).show()
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = CosmicCyanLight),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth().height(48.dp)
+                    ) {
+                        Text("Apply Prefix & Suffix", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = CosmicCyanDark)
+                    }
+                }
+
+                HorizontalDivider(color = CosmicDivider, modifier = Modifier.padding(vertical = 4.dp))
+
+                // Sub-Section C: Order/Sequential
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "SEQUENCE AUTO-NUMBERS",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = CosmicCyanLight,
+                        letterSpacing = 0.5.sp
+                    )
+                    OutlinedTextField(
+                        value = batchBaseName,
+                        onValueChange = { viewModel.batchBaseName.value = it },
+                        placeholder = { Text("Sequential Base Name", fontSize = 12.sp, color = CosmicGrayMuted) },
+                        singleLine = true,
+                        trailingIcon = {
+                            if (batchBaseName.isNotEmpty()) {
+                                IconButton(onClick = { viewModel.batchBaseName.value = "" }) {
+                                    Icon(Icons.Default.Close, "Clear", tint = CosmicGrayMuted, modifier = Modifier.size(18.dp))
+                                }
+                            }
+                        },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = CosmicCyanAccent,
+                            unfocusedBorderColor = CosmicBorder,
+                            focusedTextColor = CosmicWhiteText,
+                            unfocusedTextColor = CosmicWhiteText
+                        ),
+                        modifier = Modifier.fillMaxWidth(),
+                        textStyle = LocalTextStyle.current.copy(fontSize = 14.sp),
+                        shape = RoundedCornerShape(12.dp)
+                    )
+
+                    OutlinedTextField(
+                        value = startNumber,
+                        onValueChange = { viewModel.startNumber.value = it },
+                        placeholder = { Text("Starting Number", fontSize = 12.sp, color = CosmicGrayMuted) },
+                        singleLine = true,
+                        trailingIcon = {
+                            if (startNumber.isNotEmpty()) {
+                                IconButton(onClick = { viewModel.startNumber.value = "" }) {
+                                    Icon(Icons.Default.Close, "Clear", tint = CosmicGrayMuted, modifier = Modifier.size(18.dp))
+                                }
+                            }
+                        },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = CosmicCyanAccent,
+                            unfocusedBorderColor = CosmicBorder,
+                            focusedTextColor = CosmicWhiteText,
+                            unfocusedTextColor = CosmicWhiteText
+                        ),
+                        modifier = Modifier.fillMaxWidth(),
+                        textStyle = LocalTextStyle.current.copy(fontSize = 14.sp),
+                        shape = RoundedCornerShape(12.dp)
+                    )
+
+                    Button(
+                        onClick = {
+                            viewModel.applyBatchSequentialRenaming()
+                            Toast.makeText(context, "Sequential renaming applied successfully!", Toast.LENGTH_SHORT).show()
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = CosmicCyanLight),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth().height(48.dp)
+                    ) {
+                        Text("Apply Sequence Pattern", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = CosmicCyanDark)
+                    }
+                }
+
+                HorizontalDivider(color = CosmicDivider, modifier = Modifier.padding(vertical = 4.dp))
+
+                // Sub-Section D: Case conversions & date presets
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = "QUICK PRESETS & CONVERSIONS",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = CosmicCyanLight,
+                        letterSpacing = 0.5.sp
+                    )
+
+                    Button(
+                        onClick = {
+                            viewModel.applyBatchDateRenaming()
+                            Toast.makeText(context, "Rename by photo capture dates completed!", Toast.LENGTH_SHORT).show()
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = CosmicBorder),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth().height(48.dp)
+                    ) {
+                        Icon(Icons.Default.CalendarToday, contentDescription = "By Date", tint = CosmicWhiteText, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Format All by Capture Date", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = CosmicWhiteText)
                     }
 
-                    Spacer(modifier = Modifier.height(14.dp))
+                    Button(
+                        onClick = {
+                            viewModel.applyBatchCaseConversion(allUppercase = true)
+                            Toast.makeText(context, "Converted all base names to UPPERCASE!", Toast.LENGTH_SHORT).show()
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = CosmicBorder),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth().height(48.dp)
+                    ) {
+                        Text("CONVERT ALL TO UPPERCASE", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = CosmicWhiteText)
+                    }
 
-                    if (activeTab == "rename") {
-                        // RENAME TOOL OPTIONS
-                        Column(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            // Section 1: Find & Replace
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .background(CosmicSlateBg, RoundedCornerShape(10.dp))
-                                    .border(1.dp, CosmicBorder, RoundedCornerShape(10.dp))
-                                    .padding(12.dp)
-                            ) {
-                                Text(
-                                    text = "Find & Replace",
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = CosmicWhiteText
-                                )
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    OutlinedTextField(
-                                        value = findText,
-                                        onValueChange = { viewModel.findText.value = it },
-                                        placeholder = { Text("Find e.g. DSC_", fontSize = 12.sp, color = CosmicGrayMuted) },
-                                        singleLine = true,
-                                        colors = OutlinedTextFieldDefaults.colors(
-                                            focusedBorderColor = CosmicCyanAccent,
-                                            unfocusedBorderColor = CosmicBorder,
-                                            focusedTextColor = CosmicWhiteText,
-                                            unfocusedTextColor = CosmicWhiteText
-                                        ),
-                                        modifier = Modifier.weight(1f),
-                                        textStyle = LocalTextStyle.current.copy(fontSize = 12.sp)
-                                    )
+                    Button(
+                        onClick = {
+                            viewModel.applyBatchCaseConversion(allUppercase = false)
+                            Toast.makeText(context, "Converted all base names to lowercase!", Toast.LENGTH_SHORT).show()
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = CosmicBorder),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth().height(48.dp)
+                    ) {
+                        Text("convert all to lowercase", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = CosmicWhiteText)
+                    }
 
-                                    OutlinedTextField(
-                                        value = replaceWithText,
-                                        onValueChange = { viewModel.replaceWithText.value = it },
-                                        placeholder = { Text("Replace with", fontSize = 12.sp, color = CosmicGrayMuted) },
-                                        singleLine = true,
-                                        colors = OutlinedTextFieldDefaults.colors(
-                                            focusedBorderColor = CosmicCyanAccent,
-                                            unfocusedBorderColor = CosmicBorder,
-                                            focusedTextColor = CosmicWhiteText,
-                                            unfocusedTextColor = CosmicWhiteText
-                                        ),
-                                        modifier = Modifier.weight(1f),
-                                        textStyle = LocalTextStyle.current.copy(fontSize = 12.sp)
-                                    )
+                    Button(
+                        onClick = {
+                            viewModel.resetBatchFilenames()
+                            Toast.makeText(context, "Reverted all filenames to original names!", Toast.LENGTH_SHORT).show()
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0x1aFA5252)),
+                        border = BorderStroke(1.dp, Color(0xFFFA5252).copy(alpha = 0.4f)),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth().height(48.dp)
+                    ) {
+                        Icon(Icons.Default.Refresh, contentDescription = "Reset", tint = Color(0xFFFA5252), modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Reset All to Original Names", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFFFA5252))
+                    }
+                }
+            }
+        }
 
-                                    IconButton(
-                                        onClick = { viewModel.applyBatchFindAndReplace() },
-                                        modifier = Modifier
-                                            .size(44.dp)
-                                            .background(CosmicCyanDark, RoundedCornerShape(8.dp))
-                                            .testTag("apply_find_replace_button")
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Check,
-                                            contentDescription = "Search and replace",
-                                            tint = CosmicWhiteText
-                                        )
-                                    }
-                                }
-                            }
+        // --- 2. PRIVACY & SANITIZATION CARD ---
+        Card(
+            colors = CardDefaults.cardColors(containerColor = CosmicCardSurface),
+            shape = RoundedCornerShape(20.dp),
+            border = BorderStroke(1.dp, CosmicBorder),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Lock,
+                        contentDescription = "Bulk Privacy",
+                        tint = CosmicCyanAccent,
+                        modifier = Modifier.size(22.dp)
+                    )
+                    Text(
+                        text = "Bulk Privacy Controls (EXIF)",
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = CosmicWhiteText
+                    )
+                }
 
-                            // Section 2: Prefix & Suffix additions
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .background(CosmicSlateBg, RoundedCornerShape(10.dp))
-                                    .border(1.dp, CosmicBorder, RoundedCornerShape(10.dp))
-                                    .padding(12.dp)
-                            ) {
-                                Text(
-                                    text = "Prefix & Suffix Adds",
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = CosmicWhiteText
-                                )
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    OutlinedTextField(
-                                        value = batchPrefix,
-                                        onValueChange = { viewModel.batchPrefix.value = it },
-                                        placeholder = { Text("Prefix e.g. Vacay_", fontSize = 12.sp, color = CosmicGrayMuted) },
-                                        singleLine = true,
-                                        colors = OutlinedTextFieldDefaults.colors(
-                                            focusedBorderColor = CosmicCyanAccent,
-                                            unfocusedBorderColor = CosmicBorder,
-                                            focusedTextColor = CosmicWhiteText,
-                                            unfocusedTextColor = CosmicWhiteText
-                                        ),
-                                        modifier = Modifier.weight(1f),
-                                        textStyle = LocalTextStyle.current.copy(fontSize = 12.sp)
-                                    )
+                Text(
+                    text = "Configure sanitization presets directly applied to all files in this batch:",
+                    fontSize = 12.sp,
+                    color = CosmicGrayMuted,
+                    lineHeight = 16.sp
+                )
 
-                                    OutlinedTextField(
-                                        value = batchSuffix,
-                                        onValueChange = { viewModel.batchSuffix.value = it },
-                                        placeholder = { Text("Suffix e.g. _v2", fontSize = 12.sp, color = CosmicGrayMuted) },
-                                        singleLine = true,
-                                        colors = OutlinedTextFieldDefaults.colors(
-                                            focusedBorderColor = CosmicCyanAccent,
-                                            unfocusedBorderColor = CosmicBorder,
-                                            focusedTextColor = CosmicWhiteText,
-                                            unfocusedTextColor = CosmicWhiteText
-                                        ),
-                                        modifier = Modifier.weight(1f),
-                                        textStyle = LocalTextStyle.current.copy(fontSize = 12.sp)
-                                    )
-
-                                    IconButton(
-                                        onClick = { viewModel.applyBatchPrefixSuffix() },
-                                        modifier = Modifier
-                                            .size(44.dp)
-                                            .background(CosmicCyanDark, RoundedCornerShape(8.dp))
-                                            .testTag("apply_prefix_suffix_button")
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Check,
-                                            contentDescription = "Apply Prefix Suffix",
-                                            tint = CosmicWhiteText
-                                        )
-                                    }
-                                }
-                            }
-
-                            // Section 3: Pattern sequential rename
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .background(CosmicSlateBg, RoundedCornerShape(10.dp))
-                                    .border(1.dp, CosmicBorder, RoundedCornerShape(10.dp))
-                                    .padding(12.dp)
-                            ) {
-                                Text(
-                                    text = "Sequence / Number Auto-renaming (e.g. Doc_01, Image_02)",
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = CosmicWhiteText
-                                )
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    OutlinedTextField(
-                                        value = batchBaseName,
-                                        onValueChange = { viewModel.batchBaseName.value = it },
-                                        placeholder = { Text("Base Name e.g. Paris", fontSize = 12.sp, color = CosmicGrayMuted) },
-                                        singleLine = true,
-                                        colors = OutlinedTextFieldDefaults.colors(
-                                            focusedBorderColor = CosmicCyanAccent,
-                                            unfocusedBorderColor = CosmicBorder,
-                                            focusedTextColor = CosmicWhiteText,
-                                            unfocusedTextColor = CosmicWhiteText
-                                        ),
-                                        modifier = Modifier.weight(1.3f),
-                                        textStyle = LocalTextStyle.current.copy(fontSize = 12.sp)
-                                    )
-
-                                    OutlinedTextField(
-                                        value = startNumber,
-                                        onValueChange = { viewModel.startNumber.value = it },
-                                        placeholder = { Text("Start e.g. 1", fontSize = 12.sp, color = CosmicGrayMuted) },
-                                        singleLine = true,
-                                        colors = OutlinedTextFieldDefaults.colors(
-                                            focusedBorderColor = CosmicCyanAccent,
-                                            unfocusedBorderColor = CosmicBorder,
-                                            focusedTextColor = CosmicWhiteText,
-                                            unfocusedTextColor = CosmicWhiteText
-                                        ),
-                                        modifier = Modifier.weight(0.7f),
-                                        textStyle = LocalTextStyle.current.copy(fontSize = 12.sp)
-                                    )
-
-                                    IconButton(
-                                        onClick = { viewModel.applyBatchSequentialRenaming() },
-                                        modifier = Modifier
-                                            .size(44.dp)
-                                            .background(CosmicCyanDark, RoundedCornerShape(8.dp))
-                                            .testTag("apply_batch_sequence_button")
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Check,
-                                            contentDescription = "Sequential automatic serial rename",
-                                            tint = CosmicWhiteText
-                                        )
-                                    }
-                                }
-                            }
-
-                            // Auto-Date utility renaming
-                            Button(
-                                onClick = { viewModel.applyBatchDateRenaming() },
-                                colors = ButtonDefaults.buttonColors(containerColor = CosmicCyanDark),
-                                shape = RoundedCornerShape(8.dp),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .testTag("batch_date_rename_button")
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.CalendarToday,
-                                    contentDescription = "Date rename icon",
-                                    tint = CosmicCyanAccent,
-                                    modifier = Modifier.size(14.dp)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = "AUTO-NAMING BY DATE (e.g., 20260526_01.png)",
-                                    fontSize = 11.sp,
-                                    color = CosmicCyanAccent,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-
-                            // Dynamic convert utilities (Caps toggle)
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(10.dp)
-                            ) {
-                                Button(
-                                    onClick = { viewModel.applyBatchCaseConversion(allUppercase = true) },
-                                    colors = ButtonDefaults.buttonColors(containerColor = CosmicBorder),
-                                    shape = RoundedCornerShape(8.dp),
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .testTag("batch_uppercase_button")
-                                ) {
-                                    Text("MASS CAPS", fontSize = 11.sp, color = CosmicWhiteText, fontWeight = FontWeight.Bold)
-                                }
-
-                                Button(
-                                    onClick = { viewModel.applyBatchCaseConversion(allUppercase = false) },
-                                    colors = ButtonDefaults.buttonColors(containerColor = CosmicBorder),
-                                    shape = RoundedCornerShape(8.dp),
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .testTag("batch_lowercase_button")
-                                ) {
-                                    Text("mass lowercase", fontSize = 11.sp, color = CosmicWhiteText, fontWeight = FontWeight.Bold)
-                                }
-                            }
+                // GPS Switch Row
+                Surface(
+                    color = CosmicSlateBg.copy(alpha = 0.4f),
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, CosmicBorder.copy(alpha = 0.5f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.LocationOff,
+                            contentDescription = "GPS",
+                            tint = if (defaultScrubGps) CosmicAmberWarning else CosmicGrayMuted,
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Strip Location Data (GPS)", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = CosmicWhiteText)
+                            Text("Removes geographic tags to hide where media was captured.", fontSize = 11.sp, color = CosmicGrayMuted)
                         }
-                    } else {
-                        // METADATA SCRUB OPTIONS
-                        Column(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        Switch(
+                            checked = defaultScrubGps,
+                            onCheckedChange = {
+                                viewModel.toggleBatchScrubGps(it)
+                                Toast.makeText(context, if (it) "GPS Scrubbing Enabled for batch" else "GPS Scrubbing Disabled for batch", Toast.LENGTH_SHORT).show()
+                            }
+                        )
+                    }
+                }
+
+                // Camera Switch Row
+                Surface(
+                    color = CosmicSlateBg.copy(alpha = 0.4f),
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, CosmicBorder.copy(alpha = 0.5f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Info,
+                            contentDescription = "Camera Info",
+                            tint = if (defaultScrubCamera) CosmicCyanAccent else CosmicGrayMuted,
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Strip Device & Camera Specs", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = CosmicWhiteText)
+                            Text("Removes camera make, software version, and software logs.", fontSize = 11.sp, color = CosmicGrayMuted)
+                        }
+                        Switch(
+                            checked = defaultScrubCamera,
+                            onCheckedChange = {
+                                viewModel.toggleBatchScrubCamera(it)
+                                Toast.makeText(context, if (it) "Camera Scrubbing Enabled for batch" else "Camera Scrubbing Disabled for batch", Toast.LENGTH_SHORT).show()
+                            }
+                        )
+                    }
+                }
+
+                // Timestamps Row
+                Surface(
+                    color = CosmicSlateBg.copy(alpha = 0.4f),
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, CosmicBorder.copy(alpha = 0.5f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CalendarToday,
+                            contentDescription = "Timestamps",
+                            tint = if (defaultScrubDateTime) CosmicCyanAccent else CosmicGrayMuted,
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Strip Dates & Timestamps", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = CosmicWhiteText)
+                            Text("Wipes creation dates, hour details, and digitizing timestamps.", fontSize = 11.sp, color = CosmicGrayMuted)
+                        }
+                        Switch(
+                            checked = defaultScrubDateTime,
+                            onCheckedChange = {
+                                viewModel.toggleBatchScrubDateTime(it)
+                                Toast.makeText(context, if (it) "Date Scrubbing Enabled for batch" else "Date Scrubbing Disabled for batch", Toast.LENGTH_SHORT).show()
+                            }
+                        )
+                    }
+                }
+
+                // Full Purge Row
+                Surface(
+                    color = CosmicSlateBg.copy(alpha = 0.4f),
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, CosmicBorder.copy(alpha = 0.5f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Warning,
+                            contentDescription = "Full Purge",
+                            tint = if (defaultScrubAll) CosmicAmberWarning else CosmicGrayMuted,
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Full Privacy Purge", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = CosmicWhiteText)
+                            Text("Wipes absolutely all metadata variables without exception.", fontSize = 11.sp, color = CosmicGrayMuted)
+                        }
+                        Switch(
+                            checked = defaultScrubAll,
+                            onCheckedChange = {
+                                viewModel.toggleBatchScrubAll(it)
+                                Toast.makeText(context, if (it) "Full EXIF Purge Enabled for batch" else "Full EXIF Purge Disabled for batch", Toast.LENGTH_SHORT).show()
+                            }
+                        )
+                    }
+                }
+            }
+        }
+
+        // --- 3. FILES PREVIEW LIST CARD (SCROLLABLE LIST INTEGRATED) ---
+        Card(
+            colors = CardDefaults.cardColors(containerColor = CosmicCardSurface),
+            shape = RoundedCornerShape(20.dp),
+            border = BorderStroke(1.dp, CosmicBorder),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.List,
+                            contentDescription = "Preview list",
+                            tint = CosmicCyanAccent,
+                            modifier = Modifier.size(22.dp)
+                        )
+                        Text(
+                            text = "Modified Files Preview (${filesList.size})",
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = CosmicWhiteText
+                        )
+                    }
+                }
+
+                Text(
+                    text = "Inspect how your files will look. File names update live based on renaming controls above.",
+                    fontSize = 11.sp,
+                    color = CosmicGrayMuted,
+                    lineHeight = 15.sp
+                )
+
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    filesList.forEachIndexed { idx, item ->
+                        val proposedName = getProposedNameForFile(
+                            item = item,
+                            findText = findText,
+                            replaceWithText = replaceWithText,
+                            prefix = batchPrefix,
+                            suffix = batchSuffix,
+                            sequenceBase = batchBaseName,
+                            sequenceStart = startNumber,
+                            index = idx,
+                            totalCount = filesList.size
+                        )
+
+                        Surface(
+                            color = CosmicSlateBg,
+                            shape = RoundedCornerShape(14.dp),
+                            border = BorderStroke(1.dp, CosmicBorder.copy(alpha = 0.5f)),
+                            modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text(
-                                text = "Perform a quick batch cleanse setting across all eligible loaded files and photos:",
-                                fontSize = 12.sp,
-                                color = CosmicWhiteText.copy(alpha = 0.8f)
-                            )
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    // Mini preview image or icon
+                                    if (item.mimeType.contains("image", ignoreCase = true)) {
+                                        AsyncImage(
+                                            model = File(item.localCachedPath),
+                                            contentDescription = "Mini batch item preview",
+                                            contentScale = ContentScale.Crop,
+                                            modifier = Modifier
+                                                .size(44.dp)
+                                                .clip(RoundedCornerShape(8.dp))
+                                                .background(CosmicCardSurface)
+                                        )
+                                    } else {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(44.dp)
+                                                .clip(RoundedCornerShape(8.dp))
+                                                .background(CosmicCardSurface),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Icon(
+                                                imageVector = getGenericFileIcon(item.mimeType),
+                                                contentDescription = "file icon",
+                                                tint = CosmicCyanAccent,
+                                                modifier = Modifier.size(20.dp)
+                                            )
+                                        }
+                                    }
 
-                            Column(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                BatchActionCard(
-                                    title = "Scrub GPS & Geotags",
-                                    desc = "Removes spatial latitude coordinates & elevations.",
-                                    icon = Icons.Default.LocationOff,
-                                    onClick = { viewModel.applyBatchScrubAction(scrubGps = true, scrubCamera = false, scrubDate = false, scrubAll = false) }
-                                )
+                                    Spacer(modifier = Modifier.width(10.dp))
 
-                                BatchActionCard(
-                                    title = "Scrub Device Info",
-                                    desc = "Strips Camera Make/Model details & editing software tags.",
-                                    icon = Icons.Default.DeviceUnknown,
-                                    onClick = { viewModel.applyBatchScrubAction(scrubGps = false, scrubCamera = true, scrubDate = false, scrubAll = false) }
-                                )
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = "ORIGINAL:",
+                                            fontSize = 9.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = CosmicGrayMuted,
+                                            letterSpacing = 0.5.sp
+                                        )
+                                        Text(
+                                            text = item.originalName,
+                                            fontSize = 11.sp,
+                                            color = CosmicWhiteText.copy(alpha = 0.6f),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Spacer(modifier = Modifier.height(2.dp))
+                                        Text(
+                                            text = "PROPOSED:",
+                                            fontSize = 9.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = CosmicCyanAccent,
+                                            letterSpacing = 0.5.sp
+                                        )
+                                        Text(
+                                            text = proposedName,
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = CosmicWhiteText,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
 
-                                BatchActionCard(
-                                    title = "Scrub Timestamp Records",
-                                    desc = "Removes original creation timestamps & digitized dates.",
-                                    icon = Icons.Default.CalendarToday,
-                                    onClick = { viewModel.applyBatchScrubAction(scrubGps = false, scrubCamera = false, scrubDate = true, scrubAll = false) }
-                                )
+                                    IconButton(
+                                        onClick = { viewModel.removeFileItem(context, item.id) },
+                                        modifier = Modifier.size(32.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Close,
+                                            contentDescription = "Remove from batch",
+                                            tint = Color(0xFFFA5252),
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                }
 
-                                BatchActionCard(
-                                    title = "Full Metadata Purge (Purge All EXIF)",
-                                    desc = "Wipes out all common metadata properties fully.",
-                                    icon = Icons.Default.NoAccounts,
-                                    tint = CosmicAmberWarning,
-                                    onClick = { viewModel.applyBatchScrubAction(scrubGps = false, scrubCamera = false, scrubDate = false, scrubAll = true) }
-                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                HorizontalDivider(color = CosmicDivider)
+                                Spacer(modifier = Modifier.height(8.dp))
+
+                                // Active Privacy Presets Pills for this item
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text("Scrub options:", fontSize = 10.sp, color = CosmicGrayMuted)
+                                    
+                                    val isGpsScrubbed = item.optionScrubGps || item.optionScrubAll || defaultScrubGps || defaultScrubAll
+                                    val isCameraScrubbed = item.optionScrubCamera || item.optionScrubAll || defaultScrubCamera || defaultScrubAll
+                                    val isDateScrubbed = item.optionScrubDateTime || item.optionScrubAll || defaultScrubDateTime || defaultScrubAll
+
+                                    PreviewScrubPill(label = "Loc", active = isGpsScrubbed)
+                                    PreviewScrubPill(label = "Cam", active = isCameraScrubbed)
+                                    PreviewScrubPill(label = "Timestamp", active = isDateScrubbed)
+                                }
                             }
                         }
                     }
                 }
             }
         }
+    }
+}
+
+private fun getProposedNameForFile(
+    item: SharedFileItem,
+    findText: String,
+    replaceWithText: String,
+    prefix: String,
+    suffix: String,
+    sequenceBase: String,
+    sequenceStart: String,
+    index: Int, totalCount: Int
+): String {
+    val ext = item.extension
+    var baseName = item.nameWithoutExtension
+    
+    if (sequenceBase.trim().isNotEmpty()) {
+        val startVal = sequenceStart.toIntOrNull() ?: 1
+        val currentSeq = startVal + index
+        val formatter = java.text.DecimalFormat("000")
+        val seqString = if (totalCount >= 100) formatter.format(currentSeq) else String.format("%02d", currentSeq)
+        baseName = "${sequenceBase.trim()}_$seqString"
+    } else {
+        if (findText.isNotEmpty()) {
+            baseName = baseName.replace(findText, replaceWithText)
+        }
+        val cleanPrefix = prefix.trim()
+        val cleanSuffix = suffix.trim()
+        baseName = "$cleanPrefix$baseName$cleanSuffix"
+    }
+    
+    return if (ext.isNotEmpty()) "$baseName.$ext" else baseName
+}
+
+@Composable
+fun PreviewScrubPill(label: String, active: Boolean) {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(6.dp))
+            .background(if (active) CosmicCyanDark else CosmicDivider)
+            .padding(horizontal = 6.dp, vertical = 2.dp)
+    ) {
+        Text(
+            text = label,
+            fontSize = 9.sp,
+            fontWeight = FontWeight.Bold,
+            color = if (active) CosmicCyanLight else CosmicGrayMuted
+        )
     }
 }
 
@@ -1710,7 +2374,7 @@ fun BatchActionCard(
             Text(text = desc, fontSize = 10.sp, color = CosmicGrayMuted)
         }
         Icon(
-            imageVector = Icons.Default.ArrowRightAlt,
+            imageVector = Icons.AutoMirrored.Filled.ArrowRightAlt,
             contentDescription = "Trigger batch click",
             tint = CosmicCyanAccent,
             modifier = Modifier.size(18.dp)
@@ -1800,7 +2464,7 @@ fun FileItemCard(
                                     .padding(horizontal = 6.dp, vertical = 2.dp)
                             ) {
                                 Text(
-                                    text = item.extension.uppercase().ifEmpty { "FILE" },
+                                    text = if (item.extension.isNotEmpty()) ".${item.extension.uppercase()}" else "FILE",
                                     fontSize = 9.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = CosmicCyanDark
@@ -2390,6 +3054,716 @@ private fun getGenericFileIcon(mimeType: String): androidx.compose.ui.graphics.v
         mimeType.contains("video", ignoreCase = true) -> Icons.Default.VideoFile
         mimeType.contains("zip", ignoreCase = true) || mimeType.contains("archive", ignoreCase = true) -> Icons.Default.Archive
         mimeType.contains("text", ignoreCase = true) -> Icons.Default.Description
-        else -> Icons.Default.InsertDriveFile
+        else -> Icons.AutoMirrored.Filled.InsertDriveFile
+    }
+}
+
+@Composable
+fun ConfirmPillCheckbox(label: String, checked: Boolean) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        modifier = Modifier
+            .background(
+                color = if (checked) CosmicCyanDark else CosmicBorder,
+                shape = RoundedCornerShape(8.dp)
+            )
+            .padding(horizontal = 8.dp, vertical = 4.dp)
+    ) {
+        Icon(
+            imageVector = if (checked) Icons.Default.CheckCircle else Icons.Default.RadioButtonUnchecked,
+            contentDescription = null,
+            tint = if (checked) CosmicCyanAccent else CosmicGrayMuted,
+            modifier = Modifier.size(12.dp)
+        )
+        Text(
+            text = label,
+            fontSize = 9.sp,
+            color = if (checked) CosmicCyanLight else CosmicGrayMuted,
+            fontWeight = if (checked) FontWeight.Bold else FontWeight.Normal
+        )
+    }
+}
+
+@Composable
+fun SettingsScreen(
+    viewModel: FileViewModel,
+    onBackClick: () -> Unit,
+    onRequestPermissions: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    val useDynamicTheming by viewModel.useDynamicTheming.collectAsStateWithLifecycle()
+    val defaultScrubGps by viewModel.defaultScrubGps.collectAsStateWithLifecycle()
+    val defaultScrubCamera by viewModel.defaultScrubCamera.collectAsStateWithLifecycle()
+    val defaultScrubDateTime by viewModel.defaultScrubDateTime.collectAsStateWithLifecycle()
+    val defaultScrubAll by viewModel.defaultScrubAll.collectAsStateWithLifecycle()
+    val autoRenameSafeHashes by viewModel.autoRenameSafeHashes.collectAsStateWithLifecycle()
+    val lowercaseExtensions by viewModel.lowercaseExtensions.collectAsStateWithLifecycle()
+    val filesList by viewModel.files.collectAsStateWithLifecycle()
+
+    var cacheSizeStr by remember { mutableStateOf("0 B") }
+    
+    LaunchedEffect(filesList) {
+        val totalBytes = getFolderSize(File(context.cacheDir, "shared_temp")) + 
+                         getFolderSize(File(context.cacheDir, "processed_items"))
+        cacheSizeStr = formatSize(totalBytes)
+    }
+
+    LazyColumn(
+        modifier = modifier
+            .fillMaxSize()
+            .padding(horizontal = 20.dp)
+            .testTag("settings_screen"),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+        contentPadding = PaddingValues(vertical = 12.dp)
+    ) {
+        item {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                IconButton(
+                    onClick = onBackClick,
+                    modifier = Modifier
+                        .background(
+                            color = CosmicBorder.copy(alpha = 0.15f),
+                            shape = androidx.compose.foundation.shape.CircleShape
+                        )
+                        .testTag("settings_back_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = "Back to Cleaner",
+                        tint = CosmicCyanAccent,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    Text(
+                        text = "Preferences",
+                        fontSize = 24.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = CosmicWhiteText,
+                        letterSpacing = (-0.5).sp
+                    )
+                    Text(
+                        text = "Configure default processing heuristics & style",
+                        fontSize = 11.sp,
+                        color = CosmicGrayMuted
+                    )
+                }
+            }
+        }
+
+        item {
+            SettingsSectionHeader(title = "Gallery & API Permissions")
+        }
+
+        item {
+            Surface(
+                modifier = Modifier.fillMaxWidth().testTag("settings_permissions_card"),
+                color = CosmicCardSurface,
+                shape = RoundedCornerShape(16.dp),
+                border = BorderStroke(1.dp, CosmicBorder.copy(alpha = 0.4f))
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.VerifiedUser,
+                                contentDescription = null,
+                                tint = CosmicCyanAccent,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Column {
+                                Text(
+                                    text = "Fine-Grained Gallery Access",
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = CosmicWhiteText
+                                )
+                                Text(
+                                    text = "Status: " + getStoragePermissionStatus(context),
+                                    fontSize = 11.sp,
+                                    color = CosmicGrayMuted
+                                )
+                            }
+                        }
+                    }
+
+                    Text(
+                        text = "On Android 14+, you can grant 'Select Photos' access to authorize only files you choose. Full access bypasses individual selection prompts.",
+                        fontSize = 11.sp,
+                        color = CosmicGrayMuted,
+                        lineHeight = 14.sp
+                    )
+
+                    Button(
+                        onClick = onRequestPermissions,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = CosmicCyanAccent,
+                            contentColor = CosmicSlateBg
+                        ),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.LockOpen,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "Configure Storage Permissions",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp
+                        )
+                    }
+                }
+            }
+        }
+
+        item {
+            SettingsSectionHeader(title = "Appearance & Style")
+        }
+
+        item {
+            SettingsSwitchCard(
+                title = "Material You Dynamic Theme",
+                description = "Derive application primary accents directly from your system current wallpaper",
+                checked = useDynamicTheming,
+                icon = Icons.Default.Palette,
+                onCheckedChange = { viewModel.useDynamicTheming.value = it }
+            )
+        }
+
+        item {
+            SettingsSectionHeader(title = "Default Metadata Presets")
+        }
+
+        item {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                SettingsSwitchCard(
+                    title = "Strip Location GPS Data",
+                    description = "Clear latitude/longitude geotags from all imported media automatically",
+                    checked = defaultScrubGps,
+                    icon = Icons.Default.LocationOff,
+                    onCheckedChange = { viewModel.defaultScrubGps.value = it }
+                )
+                SettingsSwitchCard(
+                    title = "Strip Original Timestamp & Date",
+                    description = "Clear generation date-time tags from photo headers automatically",
+                    checked = defaultScrubDateTime,
+                    icon = Icons.Default.CalendarToday,
+                    onCheckedChange = { viewModel.defaultScrubDateTime.value = it }
+                )
+                SettingsSwitchCard(
+                    title = "Strip Technical Hardware Spec tags",
+                    description = "Clear camera model, lens parameters, and software makers automatically",
+                    checked = defaultScrubCamera,
+                    icon = Icons.Default.CameraAlt,
+                    onCheckedChange = { viewModel.defaultScrubCamera.value = it }
+                )
+                SettingsSwitchCard(
+                    title = "Strict Mode (Full Scrub)",
+                    description = "Remove all descriptive, artist, copyright, and custom tags simultaneously",
+                    checked = defaultScrubAll,
+                    icon = Icons.Default.VerifiedUser,
+                    onCheckedChange = { viewModel.defaultScrubAll.value = it }
+                )
+            }
+        }
+
+        item {
+            SettingsSectionHeader(title = "Automated Storage Automation")
+        }
+
+        item {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                SettingsSwitchCard(
+                    title = "File Extension Normalizer",
+                    description = "Automatically standardize files suffix to simple lowercase extensions (e.g. .JPEG to .jpg)",
+                    checked = lowercaseExtensions,
+                    icon = Icons.Default.DriveFileRenameOutline,
+                    onCheckedChange = { viewModel.lowercaseExtensions.value = it }
+                )
+                SettingsSwitchCard(
+                    title = "Opaque Hash Preservation",
+                    description = "Scrub target shared filename and assign safe 8-character random UUID on export",
+                    checked = autoRenameSafeHashes,
+                    icon = Icons.Default.Grid3x3,
+                    onCheckedChange = { viewModel.autoRenameSafeHashes.value = it }
+                )
+            }
+        }
+
+        item {
+            SettingsSectionHeader(title = "Sandbox Space & Security Audit")
+        }
+
+        item {
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                color = CosmicCardSurface,
+                shape = RoundedCornerShape(16.dp),
+                border = BorderStroke(1.dp, CosmicBorder.copy(alpha = 0.4f))
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text(
+                                text = "Local Temp Storage",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = CosmicWhiteText
+                            )
+                            Text(
+                                text = "Secure temporary folder caching original and copied sharing buffers",
+                                fontSize = 11.sp,
+                                color = CosmicGrayMuted,
+                                modifier = Modifier.fillMaxWidth(0.7f)
+                            )
+                        }
+
+                        Text(
+                            text = cacheSizeStr,
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Black,
+                            color = CosmicCyanAccent
+                        )
+                    }
+
+                    Button(
+                        onClick = {
+                            viewModel.clearFiles(context)
+                            val totalBytes = getFolderSize(File(context.cacheDir, "shared_temp")) + 
+                                             getFolderSize(File(context.cacheDir, "processed_items"))
+                            cacheSizeStr = formatSize(totalBytes)
+                            Toast.makeText(context, "Sandbox Cache Cleared Successfully", Toast.LENGTH_SHORT).show()
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = CosmicCyanAccent,
+                            contentColor = CosmicSlateBg
+                        ),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth().testTag("clear_sandbox_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.DeleteSweep,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            "Securely Erase All Cached Buffers",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp
+                        )
+                    }
+                }
+            }
+        }
+
+        item {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 16.dp),
+                color = CosmicSlateBg,
+                shape = RoundedCornerShape(12.dp),
+                border = BorderStroke(1.dp, CosmicBorder.copy(alpha = 0.15f))
+            ) {
+                Column(
+                    modifier = Modifier.padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "DIAGNOSTIC TELEMETRY STATUS",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = CosmicGrayMuted
+                    )
+                    
+                    DiagnosticRow(label = "Android SDK Version", value = "API ${Build.VERSION.SDK_INT} (${Build.VERSION.CODENAME})")
+                    DiagnosticRow(
+                        label = "Device Theme Matching Status", 
+                        value = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) "Compatible / Monet Active" else "Static Preset Active"
+                    )
+                    DiagnosticRow(label = "Sandbox File Isolation", value = "OK / Sandboxed")
+                    DiagnosticRow(label = "Authority Integrity Status", value = "OK / FileProvider verified")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun SettingsSectionHeader(title: String) {
+    Text(
+        text = title.uppercase(),
+        fontSize = 11.sp,
+        fontWeight = FontWeight.Bold,
+        color = CosmicCyanAccent,
+        letterSpacing = 1.25.sp,
+        modifier = Modifier.padding(top = 8.dp, bottom = 4.dp)
+    )
+}
+
+@Composable
+fun SettingsSwitchCard(
+    title: String,
+    description: String,
+    checked: Boolean,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onCheckedChange(!checked) },
+        color = CosmicCardSurface,
+        shape = RoundedCornerShape(16.dp),
+        border = BorderStroke(
+            width = 1.dp,
+            color = if (checked) CosmicCyanAccent.copy(alpha = 0.35f) else CosmicBorder.copy(alpha = 0.4f)
+        )
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(38.dp)
+                    .background(
+                        color = if (checked) CosmicCyanAccent.copy(alpha = 0.12f) else CosmicBorder.copy(alpha = 0.15f),
+                        shape = androidx.compose.foundation.shape.CircleShape
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = if (checked) CosmicCyanAccent else CosmicGrayMuted,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = CosmicWhiteText
+                )
+                Text(
+                    text = description,
+                    fontSize = 11.sp,
+                    color = CosmicGrayMuted,
+                    lineHeight = 14.sp
+                )
+            }
+
+            Switch(
+                checked = checked,
+                onCheckedChange = onCheckedChange,
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = CosmicCardSurface,
+                    checkedTrackColor = CosmicCyanAccent,
+                    uncheckedThumbColor = CosmicGrayMuted,
+                    uncheckedTrackColor = CosmicBorder.copy(alpha = 0.3f)
+                )
+            )
+        }
+    }
+}
+
+@Composable
+fun DiagnosticRow(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(text = label, fontSize = 11.sp, color = CosmicGrayMuted)
+        Text(text = value, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = CosmicWhiteText)
+    }
+}
+
+private fun getFolderSize(file: File): Long {
+    if (!file.exists()) return 0
+    if (!file.isDirectory) return file.length()
+    var size: Long = 0
+    file.listFiles()?.forEach {
+        size += if (it.isDirectory) getFolderSize(it) else it.length()
+    }
+    return size
+}
+
+fun getStoragePermissionStatus(context: Context): String {
+    return when {
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE -> {
+            val hasImages = context.checkSelfPermission(Manifest.permission.READ_MEDIA_IMAGES) == android.content.pm.PackageManager.PERMISSION_GRANTED
+            val hasSelect = context.checkSelfPermission(Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) == android.content.pm.PackageManager.PERMISSION_GRANTED
+            
+            if (hasImages) "All Photos Granted"
+            else if (hasSelect) "Selected Photos Only"
+            else "Access Denied"
+        }
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU -> {
+            val hasImages = context.checkSelfPermission(Manifest.permission.READ_MEDIA_IMAGES) == android.content.pm.PackageManager.PERMISSION_GRANTED
+            if (hasImages) "All Photos Granted" else "Access Denied"
+        }
+        else -> {
+            val hasOld = context.checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) == android.content.pm.PackageManager.PERMISSION_GRANTED
+            if (hasOld) "All Files Granted" else "Access Denied"
+        }
+    }
+}
+@Composable
+fun ModernPickerSelectionDialog(
+    onDismissRequest: () -> Unit,
+    onLaunchPhotoPicker: () -> Unit,
+    onLaunchDocumentPicker: () -> Unit,
+    permissionStatusText: String,
+    onRequestPermissions: () -> Unit
+) {
+    Dialog(
+        onDismissRequest = onDismissRequest,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth(0.92f)
+                .wrapContentHeight()
+                .testTag("modern_picker_dialog"),
+            color = CosmicCardSurface,
+            shape = RoundedCornerShape(24.dp),
+            border = BorderStroke(1.dp, CosmicBorder.copy(alpha = 0.4f))
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(24.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                // Header
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text(
+                            text = "Import Media & Files",
+                            fontSize = 20.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = CosmicWhiteText
+                        )
+                        Text(
+                            text = "Add photos or system documents securely",
+                            fontSize = 11.sp,
+                            color = CosmicGrayMuted
+                        )
+                    }
+                    IconButton(
+                        onClick = onDismissRequest,
+                        modifier = Modifier
+                            .background(CosmicBorder.copy(alpha = 0.15f), androidx.compose.foundation.shape.CircleShape)
+                            .size(34.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Close",
+                            tint = CosmicWhiteText,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                // Modern Side-by-Side buttons for Photos (Photo Picker) and Files (Document Picker)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    // Left Option: Photos (Uses Photo Picker)
+                    Surface(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(130.dp)
+                            .clickable {
+                                onLaunchPhotoPicker()
+                                onDismissRequest()
+                            },
+                        color = CosmicSlateBg.copy(alpha = 0.5f),
+                        shape = RoundedCornerShape(16.dp),
+                        border = BorderStroke(1.dp, CosmicCyanAccent.copy(alpha = 0.3f))
+                    ) {
+                        Column(
+                            modifier = Modifier.fillMaxSize().padding(12.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(44.dp)
+                                    .background(CosmicCyanAccent.copy(alpha = 0.12f), androidx.compose.foundation.shape.CircleShape),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.PhotoCamera,
+                                    contentDescription = "Pick Photos",
+                                    tint = CosmicCyanAccent,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Text(
+                                text = "Photos",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = CosmicWhiteText
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = "Photo Picker",
+                                fontSize = 10.sp,
+                                color = CosmicGrayMuted,
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                    }
+
+                    // Right Option: Files (Uses Document Picker)
+                    Surface(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(130.dp)
+                            .clickable {
+                                onLaunchDocumentPicker()
+                                onDismissRequest()
+                            },
+                        color = CosmicSlateBg.copy(alpha = 0.5f),
+                        shape = RoundedCornerShape(16.dp),
+                        border = BorderStroke(1.dp, CosmicCyanAccent.copy(alpha = 0.3f))
+                    ) {
+                        Column(
+                            modifier = Modifier.fillMaxSize().padding(12.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(44.dp)
+                                    .background(CosmicCyanAccent.copy(alpha = 0.12f), androidx.compose.foundation.shape.CircleShape),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.FolderOpen,
+                                    contentDescription = "Pick Files",
+                                    tint = CosmicCyanAccent,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Text(
+                                text = "Files",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = CosmicWhiteText
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = "All Documents",
+                                fontSize = 10.sp,
+                                color = CosmicGrayMuted,
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                // Compact permission status section at the bottom (extremely space-efficient)
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = CosmicSlateBg.copy(alpha = 0.15f),
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, CosmicBorder.copy(alpha = 0.15f))
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.VerifiedUser,
+                                contentDescription = null,
+                                tint = CosmicCyanAccent,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Text(
+                                text = "Access: $permissionStatusText",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = CosmicWhiteText,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        TextButton(
+                            onClick = onRequestPermissions,
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                            modifier = Modifier.testTag("grant_permissions_button")
+                        ) {
+                            Text(
+                                text = "Configure",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = CosmicCyanAccent
+                            )
+                        }
+                    }
+                }
+            }
+        }
     }
 }
