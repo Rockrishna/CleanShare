@@ -88,7 +88,7 @@ jobs:
             Automated APK build for `${{ github.ref_name }}`.
 
             ### Installation
-            1. Download `app-release-apk` (or the debug build if needed).
+            1. Download `app-release.apk` (or `app-release-unsigned.apk` / `app-debug.apk`).
             2. Transfer the APK to your Android device.
             3. Enable "Install unknown apps" for your installer app.
             4. Open the APK file and install CleanShare.
