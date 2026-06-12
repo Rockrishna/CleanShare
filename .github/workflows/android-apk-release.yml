@@ -30,11 +30,14 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
 
       - name: Prepare optional release signing keystore
-        if: ${{ secrets.RELEASE_KEYSTORE_BASE64 != '' && secrets.RELEASE_STORE_PASSWORD != '' && secrets.RELEASE_KEY_PASSWORD != '' }}
         env:
           RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
         run: |
-          echo "$RELEASE_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release-keystore.jks"
+          if [ -n "$RELEASE_KEYSTORE_BASE64" ] && [ -n "$RELEASE_STORE_PASSWORD" ] && [ -n "$RELEASE_KEY_PASSWORD" ]; then
+            echo "$RELEASE_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release-keystore.jks"
+          fi
 
       - name: Build debug and release APKs
         env:
@@ -42,7 +45,12 @@ jobs:
           STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
           KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
           KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
-        run: gradle assembleDebug assembleRelease
+        run: |
+          if [ -x "./gradlew" ]; then
+            ./gradlew assembleDebug assembleRelease
+          else
+            gradle assembleDebug assembleRelease
+          fi
 
       - name: Resolve release APK path
         id: apk_paths
@@ -70,7 +78,7 @@ jobs:
       - name: Create GitHub release with APKs
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: apk-${{ github.run_id }}-${{ github.sha }}
+          tag_name: apk-${{ github.run_number }}-${{ github.run_id }}
           name: CleanShare APK Build ${{ github.run_number }}
           generate_release_notes: true
           files: |
