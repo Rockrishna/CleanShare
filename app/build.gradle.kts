@@ -12,7 +12,7 @@ android {
   val releaseKeystorePath = System.getenv("KEYSTORE_PATH")
   val releaseStorePassword = System.getenv("STORE_PASSWORD")
   val releaseKeyPassword = System.getenv("KEY_PASSWORD")
-  val releaseKeyAlias = System.getenv("KEY_ALIAS") ?: "upload"
+  val releaseKeyAlias = System.getenv("KEY_ALIAS").takeUnless { it.isNullOrBlank() } ?: "upload"
   val hasReleaseSigning =
     !releaseKeystorePath.isNullOrBlank() &&
       !releaseStorePassword.isNullOrBlank() &&
