@@ -14,12 +14,6 @@ An Android app that helps you rename files and remove metadata before sharing th
   <img src="Images/CleanShare Screenshot 3.jpg" width="30%" alt="CleanShare screenshot 3" />
 </p>
 
-<p align="center">
-  <img src="Images/CleanShare Screenshot 4.jpg" width="30%" alt="CleanShare screenshot 4" />
-  <img src="Images/CleanShare Screenshot 5.jpg" width="30%" alt="CleanShare screenshot 5" />
-  <img src="Images/CleanShare Screenshot 6.jpg" width="30%" alt="CleanShare screenshot 6" />
-</p>
-
 ## Features
 
 - **Rename Files**: Easily rename files with custom names before sharing
