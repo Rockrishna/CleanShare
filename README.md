@@ -36,6 +36,37 @@ To run the app:
 ./gradlew installDebug
 ```
 
+## Automated APK Releases (GitHub Actions)
+
+This repository includes a workflow at `.github/workflows/android-apk-release.yml` that:
+
+- Builds both debug and release APKs
+- Uploads APKs as GitHub Actions artifacts
+- Creates a GitHub release with the generated APKs attached
+
+### Triggers
+
+- Pushes to `main`, `master`, and `build-apk-release`
+- Manual runs from **Actions** using **workflow_dispatch**
+
+### Optional release signing
+
+If you add these repository secrets, release APKs are signed:
+
+- `RELEASE_KEYSTORE_BASE64` (base64-encoded `.jks`)
+- `RELEASE_STORE_PASSWORD`
+- `RELEASE_KEY_PASSWORD`
+- `RELEASE_KEY_ALIAS` (optional, defaults to `upload`)
+
+If secrets are not configured, the workflow still builds a release APK (unsigned).
+
+### Install from release
+
+1. Open the latest GitHub release from the repository **Releases** page.
+2. Download the release APK asset.
+3. On Android, allow installs from unknown sources for your installer.
+4. Open the APK and complete installation.
+
 ## How to Use
 
 1. Launch the CleanShare app
