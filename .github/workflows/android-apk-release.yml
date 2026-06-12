@@ -78,7 +78,7 @@ jobs:
       - name: Create GitHub release with APKs
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: apk-${{ github.run_number }}-${{ github.run_id }}
+          tag_name: apk-${{ github.run_id }}
           name: CleanShare APK Build ${{ github.run_number }}
           generate_release_notes: true
           files: |
