@@ -4,10 +4,6 @@
   <img src="Images/Header.jpg" alt="CleanShare header" />
 </p>
 
-<p align="center">
-  <img src="Images/android/play_store_512.png" alt="CleanShare app icon" width="160" />
-</p>
-
 An Android app that helps you rename files and remove metadata before sharing them. Protect your privacy by cleaning sensitive information from your files before distributing them.
 
 ## Screenshots
