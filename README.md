@@ -44,6 +44,17 @@ To run the app:
 4. Remove metadata to clean sensitive information
 5. Share the cleaned file securely
 
+## Privacy Policy
+
+This app does not collect, store, or share personal data beyond what is necessary for app functionality.
+
+- Files selected by the user are processed locally on the device.
+- Metadata removal and file renaming are performed on-device.
+- The app does not upload files to any server.
+- No personal information is knowingly collected from users.
+
+For the full privacy policy, please visit: https://www.termsfeed.com/live/30406caa-8f69-4ecf-a5ec-c0eff8c648a9
+
 ## Project Structure
 
 - `app/` - Main application module
