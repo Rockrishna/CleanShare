@@ -54,6 +54,7 @@ class FileViewModel : ViewModel() {
     val startNumber = MutableStateFlow("1")
 
     // Global App Preferences / Settings States
+    val showOnboarding = MutableStateFlow(false)
     val useDynamicTheming = MutableStateFlow(true)
     val defaultScrubGps = MutableStateFlow(true)
     val defaultScrubCamera = MutableStateFlow(true)
@@ -61,6 +62,12 @@ class FileViewModel : ViewModel() {
     val defaultScrubAll = MutableStateFlow(true)
     val autoRenameSafeHashes = MutableStateFlow(false)
     val lowercaseExtensions = MutableStateFlow(true)
+
+    fun setOnboardingSeen(context: Context) {
+        showOnboarding.value = false
+        val prefs = context.getSharedPreferences("cleanshare_prefs", Context.MODE_PRIVATE)
+        prefs.edit().putBoolean("onboarding_seen", true).apply()
+    }
 
     fun clearFiles(context: Context) {
         viewModelScope.launch(Dispatchers.IO) {

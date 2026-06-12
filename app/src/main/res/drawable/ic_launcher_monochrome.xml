@@ -5,74 +5,63 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
 
-    <!-- 1. Document card base with subtle white outline and semi-transparent fill -->
+    <!-- 1. Document card base with elegant subtle outline and semi-transparent fill -->
     <path
-        android:fillColor="#15FFFFFF"
-        android:strokeColor="#60FFFFFF"
-        android:strokeWidth="2.5"
+        android:fillColor="#1CFFFFFF"
+        android:strokeColor="#66FFFFFF"
+        android:strokeWidth="2"
         android:strokeLineCap="round"
         android:strokeLineJoin="round"
         android:pathData="M 34,30 L 58,30 L 68,40 L 68,74 C 68,76.2 66.2,78 64,78 L 32,78 C 29.8,78 28,76.2 28,74 L 28,36 C 28,32.7 30.7,30 34,30 Z" />
 
     <!-- 2. Folded corner of document -->
     <path
-        android:fillColor="#30FFFFFF"
-        android:strokeColor="#60FFFFFF"
+        android:fillColor="#3DFFFFFF"
+        android:strokeColor="#66FFFFFF"
         android:strokeWidth="1.5"
         android:strokeLineCap="round"
         android:strokeLineJoin="round"
         android:pathData="M 58,30 L 58,40 L 68,40 Z" />
 
-    <!-- 3. Text content metadata lines -->
+    <!-- 3. Text content metadata lines representing cleaned data -->
     <path
-        android:strokeColor="#40FFFFFF"
+        android:strokeColor="#4DFFFFFF"
         android:strokeWidth="2"
         android:strokeLineCap="round"
         android:pathData="M 36,48 L 52,48" />
     <path
-        android:strokeColor="#30FFFFFF"
+        android:strokeColor="#3DFFFFFF"
         android:strokeWidth="2"
         android:strokeLineCap="round"
         android:pathData="M 36,54 L 46,54" />
 
-    <!-- 4. Fully filled white Shield representing secure protection -->
+    <!-- 4. Fully-stroke Shield representing secure protection -->
     <path
-        android:fillColor="#FFFFFFFF"
         android:strokeColor="#FFFFFFFF"
-        android:strokeWidth="2"
+        android:strokeWidth="2.5"
         android:strokeLineCap="round"
         android:strokeLineJoin="round"
+        android:fillColor="#26FFFFFF"
         android:pathData="M 51,49 C 61,49 66,51 66,51 C 66,51 71,49 81,49 C 81,49 84,65 66,81 C 48,65 51,49 51,49 Z" />
 
-    <!-- 5. Negative space checkmark (cuts through the solid white shield to reveal dynamic tinting) -->
-    <!-- Opentype eraser: we draw black since launcher engines map light areas to tint color and dark/transparent as mask -->
+    <!-- 5. Opaque Checkmark inside the shield -->
     <path
-        android:strokeColor="#00000000"
-        android:strokeWidth="2.8"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="2.5"
         android:strokeLineCap="round"
         android:strokeLineJoin="round"
         android:fillColor="#00000000"
         android:pathData="M 59,64 L 64,69 L 73,59" />
 
-    <!-- Instead of black path, let's use a subtle outline or carve-out that shows up translucent or dark in the theme -->
-    <!-- Let's represent the checkmark as transparent path or negative punch out.
-         In vector drawables, drawing with a translucent/solid color or a nice crisp stroke works beautifully. Let's make the checkmark hollow. -->
-    <path
-        android:strokeColor="#000000"
-        android:strokeWidth="2.8"
-        android:strokeLineCap="round"
-        android:strokeLineJoin="round"
-        android:pathData="M 59,64 L 64,69 L 73,59" />
-
-    <!-- 6. Gorgeous Sparkle Stars (full solid white to receive accent tints) -->
+    <!-- 6. Gorgeous Sparkle Stars (opaque and semi-translucent for depth under dynamic theme tinting) -->
     <path
         android:fillColor="#FFFFFFFF"
         android:pathData="M 34,34 Q 34,42 26,42 Q 34,42 34,50 Q 34,42 42,42 Q 34,42 34,34 Z" />
     <path
-        android:fillColor="#80FFFFFF"
+        android:fillColor="#AAFFFFFF"
         android:pathData="M 74,28 Q 74,34 68,34 Q 74,34 74,40 Q 74,34 80,34 Q 74,34 74,28 Z" />
     <path
-        android:fillColor="#40FFFFFF"
+        android:fillColor="#66FFFFFF"
         android:pathData="M 22,59 Q 22,64 17,64 Q 22,64 22,69 Q 22,64 27,64 Q 22,64 22,59 Z" />
 
 </vector>

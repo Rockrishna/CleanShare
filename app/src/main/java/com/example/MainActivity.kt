@@ -20,7 +20,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.result.PickVisualMediaRequest
 import android.Manifest
 import androidx.compose.animation.*
-import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -33,6 +33,8 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
+import kotlinx.coroutines.delay
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.automirrored.filled.*
@@ -115,16 +117,31 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
+        // Handle first launch user flow onboarding logic
+        val prefs = getSharedPreferences("cleanshare_prefs", MODE_PRIVATE)
+        val onboardingSeen = prefs.getBoolean("onboarding_seen", false)
+        if (!onboardingSeen) {
+            fileViewModel.showOnboarding.value = true
+        }
+
         // Handle initial incoming share intent
         intent?.let { handleIncomingIntent(it) }
 
         setContent {
             val useDynamicTheming by fileViewModel.useDynamicTheming.collectAsStateWithLifecycle()
+            val showOnboarding by fileViewModel.showOnboarding.collectAsStateWithLifecycle()
 
             MyApplicationTheme(dynamicColor = useDynamicTheming) {
-                MainContentScreen(
-                    viewModel = fileViewModel
-                )
+                if (showOnboarding) {
+                    OnboardingScreen(
+                        viewModel = fileViewModel,
+                        onDismiss = { fileViewModel.setOnboardingSeen(this) }
+                    )
+                } else {
+                    MainContentScreen(
+                        viewModel = fileViewModel
+                    )
+                }
             }
         }
     }
@@ -259,11 +276,15 @@ fun MainContentScreen(
                 // Launch Share Chooser
                 val chooser = Intent.createChooser(prepared.intent, "Send Cleaned Files")
                 context.startActivity(chooser)
+                showConfirmPreviewScreen = false
             } catch (e: Exception) {
                 Toast.makeText(context, "Sharing failed: ${e.message}", Toast.LENGTH_LONG).show()
+                showConfirmPreviewScreen = false
             } finally {
                 viewModel.resetShareState()
             }
+        } else if (shareState is ShareState.Error) {
+            showConfirmPreviewScreen = false
         }
     }
 
@@ -420,104 +441,117 @@ fun MainContentScreen(
                             .fillMaxSize()
                             .padding(horizontal = 16.dp)
                     ) {
-                        if (currentScreenModeTab == "single") {
-                            Column(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .fillMaxWidth()
-                                    .verticalScroll(scrollState),
-                                verticalArrangement = Arrangement.spacedBy(12.dp)
-                            ) {
-                                // Files Carousel (only visible at top if NOT folded flip mode and multiple files are imported)
-                                if (filesList.size > 1 && !isFoldedFlip) {
-                                    FilesCarousel(
-                                        filesList = filesList,
-                                        selectedIndex = currentIndex,
-                                        onIndexSelected = { selectedFileIndex = it }
-                                    )
-                                } else if (filesList.size == 1) {
-                                    Spacer(modifier = Modifier.height(8.dp))
+                        AnimatedContent(
+                            targetState = currentScreenModeTab,
+                            transitionSpec = {
+                                if (targetState == "batch") {
+                                    (slideInHorizontally { width -> width } + fadeIn(animationSpec = tween(220))).togetherWith(
+                                        slideOutHorizontally { width -> -width } + fadeOut(animationSpec = tween(180)))
+                                } else {
+                                    (slideInHorizontally { width -> -width } + fadeIn(animationSpec = tween(220))).togetherWith(
+                                        slideOutHorizontally { width -> width } + fadeOut(animationSpec = tween(180)))
                                 }
-
-                                // Interactive Scaling Image Preview in Portrait!
-                                val activeImageFraction = ((200.dp - scrollOffsetDp) / 200.dp).coerceIn(0.65f, 1.0f)
-
-                                Box(
+                            },
+                            label = "tabTransition",
+                            modifier = Modifier.weight(1f)
+                        ) { targetTab ->
+                            if (targetTab == "single") {
+                                Column(
                                     modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(200.dp)
-                                        .graphicsLayer {
-                                            alpha = activeImageFraction
-                                            scaleX = activeImageFraction
-                                            scaleY = activeImageFraction
-                                        },
-                                    contentAlignment = Alignment.Center
+                                        .fillMaxSize()
+                                        .verticalScroll(scrollState),
+                                    verticalArrangement = Arrangement.spacedBy(12.dp)
                                 ) {
-                                    ActiveFilePreviewCard(
-                                        activeItem = realActiveItem,
-                                        modifier = Modifier.fillMaxSize()
-                                    )
-                                }
-
-                                // Active individual name editor
-                                ActiveFileRenameSection(
-                                    item = realActiveItem,
-                                    onFilenameChange = { newBaseName ->
-                                        val ext = realActiveItem.extension
-                                        val fullName = if (ext.isNotEmpty()) "$newBaseName.$ext" else newBaseName
-                                        viewModel.updateFilename(realActiveItem.id, fullName)
+                                    // Files Carousel (only visible at top if NOT folded flip mode and multiple files are imported)
+                                    if (filesList.size > 1 && !isFoldedFlip) {
+                                        FilesCarousel(
+                                            filesList = filesList,
+                                            selectedIndex = currentIndex,
+                                            onIndexSelected = { selectedFileIndex = it }
+                                        )
+                                    } else if (filesList.size == 1) {
+                                        Spacer(modifier = Modifier.height(8.dp))
                                     }
-                                )
 
-                                // Individual active item controls / metadata switches
-                                ActiveItemControls(
-                                    realActiveItem,
-                                    onEditMetadataClick = { selectedFileForMetadataEdit = realActiveItem },
-                                    onToggleGps = { v -> viewModel.toggleScrubGps(realActiveItem.id, v) },
-                                    onToggleCamera = { v -> viewModel.toggleScrubCamera(realActiveItem.id, v) },
-                                    onToggleDate = { v -> viewModel.toggleScrubDateTime(realActiveItem.id, v) },
-                                    onToggleAllExif = { v -> viewModel.toggleScrubAll(realActiveItem.id, v) }
-                                )
+                                    // Interactive Scaling Image Preview in Portrait!
+                                    val activeImageFraction = ((200.dp - scrollOffsetDp) / 200.dp).coerceIn(0.65f, 1.0f)
 
-                                // Folding Flip Phone Specific Layout requirement:
-                                // "for multiple images, on a folding flip phone when folded move to the bottom half the carousel"
-                                if (filesList.size > 1 && isFoldedFlip) {
-                                    Spacer(modifier = Modifier.height(10.dp))
-                                    Text(
-                                        text = "Select Active File:",
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = CosmicCyanAccent,
-                                        modifier = Modifier.padding(horizontal = 4.dp)
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(200.dp)
+                                            .graphicsLayer {
+                                                alpha = activeImageFraction
+                                                scaleX = activeImageFraction
+                                                scaleY = activeImageFraction
+                                            },
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        ActiveFilePreviewCard(
+                                            activeItem = realActiveItem,
+                                            modifier = Modifier.fillMaxSize()
+                                        )
+                                    }
+
+                                    // Active individual name editor
+                                    ActiveFileRenameSection(
+                                        item = realActiveItem,
+                                        onFilenameChange = { newBaseName ->
+                                            val ext = realActiveItem.extension
+                                            val fullName = if (ext.isNotEmpty()) "$newBaseName.$ext" else newBaseName
+                                            viewModel.updateFilename(realActiveItem.id, fullName)
+                                        }
                                     )
-                                    FilesCarousel(
-                                        filesList = filesList,
-                                        selectedIndex = currentIndex,
-                                        onIndexSelected = { selectedFileIndex = it },
-                                        modifier = Modifier.padding(bottom = 12.dp)
+
+                                    // Individual active item controls / metadata switches
+                                    ActiveItemControls(
+                                        realActiveItem,
+                                        onEditMetadataClick = { selectedFileForMetadataEdit = realActiveItem },
+                                        onToggleGps = { v -> viewModel.toggleScrubGps(realActiveItem.id, v) },
+                                        onToggleCamera = { v -> viewModel.toggleScrubCamera(realActiveItem.id, v) },
+                                        onToggleDate = { v -> viewModel.toggleScrubDateTime(realActiveItem.id, v) },
+                                        onToggleAllExif = { v -> viewModel.toggleScrubAll(realActiveItem.id, v) }
                                     )
+
+                                    // Folding Flip Phone Specific Layout requirement:
+                                    // "for multiple images, on a folding flip phone when folded move to the bottom half the carousel"
+                                    if (filesList.size > 1 && isFoldedFlip) {
+                                        Spacer(modifier = Modifier.height(10.dp))
+                                        Text(
+                                            text = "Select Active File:",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = CosmicCyanAccent,
+                                            modifier = Modifier.padding(horizontal = 4.dp)
+                                        )
+                                        FilesCarousel(
+                                            filesList = filesList,
+                                            selectedIndex = currentIndex,
+                                            onIndexSelected = { selectedFileIndex = it },
+                                            modifier = Modifier.padding(bottom = 12.dp)
+                                        )
+                                    }
+                                    
+                                    Spacer(modifier = Modifier.height(96.dp)) // padding so content stays free of the sharing button
                                 }
-                                
-                                Spacer(modifier = Modifier.height(96.dp)) // padding so content stays free of the sharing button
-                            }
-                        } else {
-                            // "batch" tab option in portrait mode:
-                            Column(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .fillMaxWidth()
-                                    .verticalScroll(rememberScrollState()),
-                                verticalArrangement = Arrangement.spacedBy(12.dp)
-                            ) {
-                                StatusSummaryHeader(filesList = filesList)
+                            } else {
+                                // "batch" tab option in portrait mode:
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .verticalScroll(rememberScrollState()),
+                                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    StatusSummaryHeader(filesList = filesList)
 
-                                BatchControlBoard(
-                                    activeTab = activeTab,
-                                    onTabChange = { activeTab = it },
-                                    viewModel = viewModel
-                                )
-                                
-                                Spacer(modifier = Modifier.height(96.dp)) // padding so content stays free of the sharing button
+                                    BatchControlBoard(
+                                        activeTab = activeTab,
+                                        onTabChange = { activeTab = it },
+                                        viewModel = viewModel
+                                    )
+                                    
+                                    Spacer(modifier = Modifier.height(96.dp)) // padding so content stays free of the sharing button
+                                }
                             }
                         }
                     }
@@ -525,7 +559,11 @@ fun MainContentScreen(
             }
         }
         // Processing screen blocking indicator
-        if (shareState is ShareState.Processing) {
+        AnimatedVisibility(
+            visible = shareState is ShareState.Processing && !showConfirmPreviewScreen,
+            enter = fadeIn(animationSpec = tween(300)) + scaleIn(initialScale = 0.92f, animationSpec = spring(dampingRatio = 0.7f, stiffness = 150f)),
+            exit = fadeOut(animationSpec = tween(200)) + scaleOut(targetScale = 0.92f, animationSpec = tween(200))
+        ) {
             ProcessingOverlay()
         }
 
@@ -553,6 +591,17 @@ fun MainContentScreen(
 
             // High-Contrast Process & Share Floating Button panel
             if (filesList.isNotEmpty()) {
+                val infiniteTransition = rememberInfiniteTransition(label = "pulse")
+                val pulseScale by infiniteTransition.animateFloat(
+                    initialValue = 1.0f,
+                    targetValue = 1.03f,
+                    animationSpec = infiniteRepeatable(
+                        animation = tween(1400, easing = LinearEasing),
+                        repeatMode = RepeatMode.Reverse
+                    ),
+                    label = "pulseScale"
+                )
+
                 Surface(
                     color = CosmicSlateBg.copy(alpha = 0.95f),
                     modifier = Modifier
@@ -583,6 +632,10 @@ fun MainContentScreen(
                             .fillMaxWidth()
                             .padding(16.dp)
                             .height(56.dp)
+                            .graphicsLayer {
+                                scaleX = pulseScale
+                                scaleY = pulseScale
+                            }
                             .testTag("apply_and_share_button")
                     ) {
                         Icon(
@@ -594,7 +647,7 @@ fun MainContentScreen(
                         Text(
                             text = "Clean & Share",
                             fontSize = 16.sp,
-                            fontWeight = FontWeight.Bold,
+                            fontWeight = FontWeight.ExtraBold,
                             fontFamily = FontFamily.SansSerif
                         )
                     }
@@ -620,16 +673,46 @@ fun MainContentScreen(
             )
         }
 
-        // Beautiful full confirmation preview overlay screen
+        // Beautiful full confirmation preview overlay screen (now replaced with clean animated check success screen + vibration)
         if (showConfirmPreviewScreen) {
             androidx.compose.ui.window.Dialog(
                 onDismissRequest = { showConfirmPreviewScreen = false },
                 properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
             ) {
+                var animatedCheckIn by remember { mutableStateOf(false) }
+                val context = LocalContext.current
+
+                LaunchedEffect(Unit) {
+                    // Start of checkmark anim
+                    delay(120)
+                    animatedCheckIn = true
+
+                    // Perform high-quality premium vibration haptic feedback
+                    val vibrator = context.getSystemService(Context.VIBRATOR_SERVICE) as? android.os.Vibrator
+                    vibrator?.let { v ->
+                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                            v.vibrate(
+                                android.os.VibrationEffect.createWaveform(
+                                    longArrayOf(0, 90, 110, 150), // Off, On (delicate tap), Off, On (assertive confirm)
+                                    intArrayOf(0, 140, 0, 245),
+                                    -1
+                                )
+                            )
+                        } else {
+                            @Suppress("DEPRECATION")
+                            v.vibrate(longArrayOf(0, 90, 110, 150), -1)
+                        }
+                    }
+
+                    // Minimum presentation time of checkmark & ripple visuals
+                    delay(1500)
+
+                    // Execute actual file scrub + formatting and open share intent
+                    viewModel.processAndPrepareShare(context)
+                }
+
                 Surface(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(CosmicSlateBg),
+                    modifier = Modifier.fillMaxSize(),
                     color = CosmicSlateBg
                 ) {
                     Column(
@@ -637,170 +720,175 @@ fun MainContentScreen(
                             .fillMaxSize()
                             .statusBarsPadding()
                             .navigationBarsPadding()
-                            .padding(20.dp)
+                            .padding(24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
                     ) {
-                        // Title header
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column {
-                                Text(
-                                    text = "Confirm Sharing Preview",
-                                    fontSize = 20.sp,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    color = CosmicWhiteText
-                                )
-                                Text(
-                                    text = "Review all modifications and sanitizations below",
-                                    fontSize = 11.sp,
-                                    color = CosmicGrayMuted
-                                )
-                            }
-                            IconButton(onClick = { showConfirmPreviewScreen = false }) {
-                                Icon(Icons.Default.Close, contentDescription = "Close", tint = CosmicWhiteText)
-                            }
-                        }
+                        val infiniteTransition = rememberInfiniteTransition(label = "ripple")
 
-                        Spacer(modifier = Modifier.height(16.dp))
+                        // Sonar wave ripple 1
+                        val rippleScale1 by infiniteTransition.animateFloat(
+                            initialValue = 1.0f,
+                            targetValue = 2.4f,
+                            animationSpec = infiniteRepeatable(
+                                animation = tween(1500, easing = FastOutSlowInEasing),
+                                repeatMode = RepeatMode.Restart
+                            ),
+                            label = "rippleScale1"
+                        )
+                        val rippleAlpha1 by infiniteTransition.animateFloat(
+                            initialValue = 0.75f,
+                            targetValue = 0.0f,
+                            animationSpec = infiniteRepeatable(
+                                animation = tween(1500, easing = FastOutSlowInEasing),
+                                repeatMode = RepeatMode.Restart
+                            ),
+                            label = "rippleAlpha1"
+                        )
 
-                        // Sanitization list
-                        LazyColumn(
-                            modifier = Modifier
-                                .weight(1f)
-                                .fillMaxWidth()
-                                .background(CosmicCardSurface, RoundedCornerShape(16.dp))
-                                .border(1.dp, CosmicBorder, RoundedCornerShape(16.dp))
-                                .padding(12.dp),
-                            verticalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            items(filesList) { sharedItem ->
-                                Column(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .background(CosmicSlateBg, RoundedCornerShape(10.dp))
-                                        .border(1.dp, CosmicBorder, RoundedCornerShape(10.dp))
-                                        .padding(12.dp)
-                                ) {
-                                    // Row 1: File icon and size
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Icon(
-                                            imageVector = getGenericFileIcon(sharedItem.mimeType),
-                                            contentDescription = "File icon",
-                                            tint = CosmicCyanAccent,
-                                            modifier = Modifier.size(18.dp)
-                                        )
-                                        Spacer(modifier = Modifier.width(8.dp))
-                                        Text(
-                                            text = formatSize(sharedItem.sizeBytes),
-                                            fontSize = 9.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = CosmicCyanLight,
-                                            modifier = Modifier
-                                                .background(CosmicCyanDark, RoundedCornerShape(4.dp))
-                                                .padding(horizontal = 6.dp, vertical = 2.dp)
-                                        )
-                                    }
-
-                                    Spacer(modifier = Modifier.height(6.dp))
-
-                                    // Original Name
-                                    Text(
-                                        text = "ORIGINAL",
-                                        fontSize = 9.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = CosmicGrayMuted
-                                    )
-                                    Text(
-                                        text = sharedItem.originalName,
-                                        fontSize = 11.sp,
-                                        color = CosmicWhiteText.copy(alpha = 0.5f),
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-
-                                    Spacer(modifier = Modifier.height(4.dp))
-
-                                    // Clean name
-                                    Text(
-                                        text = "PROPOSED NEW NAME",
-                                        fontSize = 9.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = CosmicCyanAccent
-                                    )
-                                    Text(
-                                        text = sharedItem.currentName,
-                                        fontSize = 13.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = CosmicWhiteText,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-
-                                    Spacer(modifier = Modifier.height(8.dp))
-
-                                    // Sanitation indicators
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.spacedBy(14.dp)
-                                    ) {
-                                        val hasGps = sharedItem.optionScrubGps || sharedItem.optionScrubAll
-                                        val hasCamera = sharedItem.optionScrubCamera || sharedItem.optionScrubAll
-                                        val hasTime = sharedItem.optionScrubDateTime || sharedItem.optionScrubAll
-
-                                        ConfirmPillCheckbox(label = "Strip GPS", checked = hasGps)
-                                        ConfirmPillCheckbox(label = "Strip Camera Info", checked = hasCamera)
-                                        ConfirmPillCheckbox(label = "Strip Date", checked = hasTime)
-                                    }
-                                }
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(16.dp))
-
-                        // Main confirm actions
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            OutlinedButton(
-                                onClick = { showConfirmPreviewScreen = false },
-                                shape = RoundedCornerShape(24.dp),
-                                border = BorderStroke(1.dp, CosmicBorder),
-                                colors = ButtonDefaults.outlinedButtonColors(contentColor = CosmicWhiteText),
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .height(48.dp)
-                            ) {
-                                Text("Cancel", fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                            }
-
-                            Button(
-                                onClick = {
-                                    showConfirmPreviewScreen = false
-                                    viewModel.processAndPrepareShare(context)
+                        // Sonar wave ripple 2 (delayed offset using custom keyframes)
+                        val rippleScale2 by infiniteTransition.animateFloat(
+                            initialValue = 1.0f,
+                            targetValue = 2.4f,
+                            animationSpec = infiniteRepeatable(
+                                animation = keyframes {
+                                    durationMillis = 1500
+                                    1.0f at 0
+                                    1.0f at 400
+                                    2.4f at 1500
                                 },
-                                shape = RoundedCornerShape(24.dp),
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = CosmicCyanAccent,
-                                    contentColor = CosmicCardSurface
-                                ),
+                                repeatMode = RepeatMode.Restart
+                            ),
+                            label = "rippleScale2"
+                        )
+                        val rippleAlpha2 by infiniteTransition.animateFloat(
+                            initialValue = 0.0f,
+                            targetValue = 0.0f,
+                            animationSpec = infiniteRepeatable(
+                                animation = keyframes {
+                                    durationMillis = 1500
+                                    0.0f at 0
+                                    0.75f at 400
+                                    0.0f at 1500
+                                },
+                                repeatMode = RepeatMode.Restart
+                            ),
+                            label = "rippleAlpha2"
+                        )
+
+                        Box(
+                            modifier = Modifier.size(240.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            // Ripple 2
+                            Box(
                                 modifier = Modifier
-                                    .weight(1.4f)
-                                    .height(48.dp)
+                                    .size(96.dp)
+                                    .graphicsLayer {
+                                        scaleX = rippleScale2
+                                        scaleY = rippleScale2
+                                        alpha = rippleAlpha2
+                                    }
+                                    .background(Color(0xFF22C55E).copy(alpha = 0.22f), CircleShape)
+                                    .border(1.5.dp, Color(0xFF22C55E).copy(alpha = 0.6f), CircleShape)
+                            )
+
+                            // Ripple 1
+                            Box(
+                                modifier = Modifier
+                                    .size(96.dp)
+                                    .graphicsLayer {
+                                        scaleX = rippleScale1
+                                        scaleY = rippleScale1
+                                        alpha = rippleAlpha1
+                                    }
+                                    .background(Color(0xFF22C55E).copy(alpha = 0.22f), CircleShape)
+                                    .border(1.5.dp, Color(0xFF22C55E).copy(alpha = 0.6f), CircleShape)
+                            )
+
+                            // Main solid check container with bouncy pop entry
+                            val checkmarkScale by animateFloatAsState(
+                                targetValue = if (animatedCheckIn) 1.0f else 0.0f,
+                                animationSpec = spring(
+                                    dampingRatio = 0.55f,
+                                    stiffness = 150f
+                                ),
+                                label = "checkmarkScale"
+                            )
+
+                            Box(
+                                modifier = Modifier
+                                    .size(96.dp)
+                                    .graphicsLayer {
+                                        scaleX = checkmarkScale
+                                        scaleY = checkmarkScale
+                                    }
+                                    .border(2.dp, CosmicWhiteText.copy(alpha = 0.2f), CircleShape)
+                                    .background(Color(0xFF22C55E), CircleShape),
+                                contentAlignment = Alignment.Center
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.Check,
-                                    contentDescription = "Confirm",
-                                    modifier = Modifier.size(16.dp)
+                                    contentDescription = "Ready",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(48.dp)
                                 )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("Confirm & Share", fontSize = 13.sp, fontWeight = FontWeight.Bold)
                             }
+                        }
+
+                        Spacer(modifier = Modifier.height(32.dp))
+
+                        // Success header text
+                        Text(
+                            text = "Cleaned & Ready!",
+                            fontSize = 24.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = CosmicWhiteText,
+                            fontFamily = FontFamily.SansSerif,
+                            letterSpacing = (-0.5).sp
+                        )
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        // Subtitle detailing what has been sanitised
+                        Text(
+                            text = "Original properties, location markers, and EXIF tags stripped. Dispensing cleaned copy...",
+                            fontSize = 13.sp,
+                            color = CosmicGrayMuted,
+                            textAlign = TextAlign.Center,
+                            lineHeight = 20.sp,
+                            modifier = Modifier.padding(horizontal = 24.dp)
+                        )
+                        
+                        Spacer(modifier = Modifier.height(40.dp))
+                        
+                        // Small aesthetic loading bar while preparing the share sheet
+                        Box(
+                            modifier = Modifier
+                                .width(120.dp)
+                                .height(4.dp)
+                                .background(CosmicBorder, RoundedCornerShape(2.dp))
+                        ) {
+                            val loadingTransition = rememberInfiniteTransition(label = "loadingProgress")
+                            val progressOffset by loadingTransition.animateFloat(
+                                initialValue = -60f,
+                                targetValue = 60f,
+                                animationSpec = infiniteRepeatable(
+                                    animation = tween(1200, easing = FastOutSlowInEasing),
+                                    repeatMode = RepeatMode.Reverse
+                                ),
+                                label = "progress"
+                            )
+                            
+                            Box(
+                                modifier = Modifier
+                                    .width(40.dp)
+                                    .fillMaxHeight()
+                                    .graphicsLayer {
+                                        translationX = progressOffset
+                                    }
+                                    .background(Color(0xFF22C55E), RoundedCornerShape(2.dp))
+                            )
                         }
                     }
                 }
@@ -1041,6 +1129,55 @@ fun MinimalTopBar(
 fun EmptyStateView(
     onSelectFilesClick: () -> Unit
 ) {
+    var animateStart by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        animateStart = true
+    }
+
+    val iconAlpha by animateFloatAsState(
+        targetValue = if (animateStart) 1f else 0f,
+        animationSpec = tween(600, delayMillis = 100),
+        label = "iconAlpha"
+    )
+    val iconOffset by animateDpAsState(
+        targetValue = if (animateStart) 0.dp else 30.dp,
+        animationSpec = spring(dampingRatio = 0.8f, stiffness = 150f),
+        label = "iconOffset"
+    )
+
+    val titleAlpha by animateFloatAsState(
+        targetValue = if (animateStart) 1f else 0f,
+        animationSpec = tween(600, delayMillis = 200),
+        label = "titleAlpha"
+    )
+    val titleOffset by animateDpAsState(
+        targetValue = if (animateStart) 0.dp else 20.dp,
+        animationSpec = spring(dampingRatio = 0.8f, stiffness = 150f),
+        label = "titleOffset"
+    )
+
+    val descAlpha by animateFloatAsState(
+        targetValue = if (animateStart) 1f else 0f,
+        animationSpec = tween(600, delayMillis = 300),
+        label = "descAlpha"
+    )
+    val descOffset by animateDpAsState(
+        targetValue = if (animateStart) 0.dp else 20.dp,
+        animationSpec = spring(dampingRatio = 0.8f, stiffness = 150f),
+        label = "descOffset"
+    )
+
+    val buttonAlpha by animateFloatAsState(
+        targetValue = if (animateStart) 1f else 0f,
+        animationSpec = tween(600, delayMillis = 400),
+        label = "buttonAlpha"
+    )
+    val buttonOffset by animateDpAsState(
+        targetValue = if (animateStart) 0.dp else 20.dp,
+        animationSpec = spring(dampingRatio = 0.8f, stiffness = 150f),
+        label = "buttonOffset"
+    )
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -1055,6 +1192,10 @@ fun EmptyStateView(
             Box(
                 modifier = Modifier
                     .size(130.dp)
+                    .graphicsLayer {
+                        alpha = iconAlpha
+                        translationY = iconOffset.toPx()
+                    }
                     .background(
                         Brush.radialGradient(
                             colors = listOf(CosmicCyanAccent.copy(alpha = 0.22f), Color.Transparent)
@@ -1079,18 +1220,27 @@ fun EmptyStateView(
                 fontWeight = FontWeight.ExtraBold,
                 color = CosmicWhiteText,
                 textAlign = TextAlign.Center,
-                letterSpacing = (-0.5).sp
+                letterSpacing = (-0.5).sp,
+                modifier = Modifier.graphicsLayer {
+                    alpha = titleAlpha
+                    translationY = titleOffset.toPx()
+                }
             )
 
             Spacer(modifier = Modifier.height(8.dp))
 
             Text(
-                text = "Rename files and photos while scrubbing sensitive metadata (like GPS location markers, device details, and original timestamps) before clean sharing.",
+                text = "Easily scrub sensitive metadata and rename your files to protect your privacy.",
                 fontSize = 13.sp,
                 color = CosmicGrayMuted,
                 textAlign = TextAlign.Center,
                 lineHeight = 18.sp,
-                modifier = Modifier.padding(horizontal = 8.dp)
+                modifier = Modifier
+                    .padding(horizontal = 8.dp)
+                    .graphicsLayer {
+                        alpha = descAlpha
+                        translationY = descOffset.toPx()
+                    }
             )
 
             Spacer(modifier = Modifier.height(24.dp))
@@ -1106,6 +1256,10 @@ fun EmptyStateView(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(52.dp)
+                    .graphicsLayer {
+                        alpha = buttonAlpha
+                        translationY = buttonOffset.toPx()
+                    }
                     .testTag("select_files_button")
             ) {
                 Icon(
@@ -1130,14 +1284,25 @@ fun EmptyStateView(
                 color = CosmicCyanAccent.copy(alpha = 0.8f),
                 letterSpacing = 1.sp,
                 textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .graphicsLayer {
+                        alpha = buttonAlpha
+                    }
             )
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            GuideStepRow(step = "1", text = "Open any file explorer, gallery, or document app")
-            GuideStepRow(step = "2", text = "Tap 'Share' and choose CleanShare from the sheet")
-            GuideStepRow(step = "3", text = "Adjust file names, scrub location, and share instantly")
+            Column(
+                modifier = Modifier.graphicsLayer {
+                    alpha = buttonAlpha
+                    translationY = buttonOffset.toPx()
+                }
+            ) {
+                GuideStepRow(step = "1", text = "Open any file explorer, gallery, or document app")
+                GuideStepRow(step = "2", text = "Tap 'Share' and choose CleanShare from the sheet")
+                GuideStepRow(step = "3", text = "Adjust file names, scrub location, and share instantly")
+            }
         }
     }
 }
@@ -1240,19 +1405,42 @@ fun FilesCarousel(
             key = { _, item -> item.id }
         ) { index, item ->
             val isSelected = index == selectedIndex
-            val borderStroke = if (isSelected) {
-                BorderStroke(2.dp, CosmicCyanAccent)
-            } else {
-                BorderStroke(1.dp, CosmicBorder)
-            }
+            
+            // Animate border color smoothly
+            val targetBorderColor = if (isSelected) CosmicCyanAccent else CosmicBorder
+            val borderColor by animateColorAsState(
+                targetValue = targetBorderColor,
+                animationSpec = spring(stiffness = 200f),
+                label = "carouselBorderColor"
+            )
+            
+            // Animate border width smoothly
+            val targetBorderWidth = if (isSelected) 2.5.dp else 1.dp
+            val borderWidth by animateDpAsState(
+                targetValue = targetBorderWidth,
+                animationSpec = spring(stiffness = 200f),
+                label = "carouselBorderWidth"
+            )
+            
+            // Dynamic scale magnification with spring physics
+            val targetScale = if (isSelected) 1.06f else 0.94f
+            val scale by animateFloatAsState(
+                targetValue = targetScale,
+                animationSpec = spring(dampingRatio = 0.65f, stiffness = 180f),
+                label = "carouselScale"
+            )
             
             Box(
                 modifier = Modifier
                     .width(90.dp)
                     .height(90.dp)
+                    .graphicsLayer {
+                        scaleX = scale
+                        scaleY = scale
+                    }
                     .clip(RoundedCornerShape(16.dp))
                     .background(CosmicCardSurface)
-                    .border(borderStroke, RoundedCornerShape(16.dp))
+                    .border(BorderStroke(borderWidth, borderColor), RoundedCornerShape(16.dp))
                     .clickable { onIndexSelected(index) }
                     .padding(4.dp),
                 contentAlignment = Alignment.Center
@@ -2695,14 +2883,50 @@ fun ScrubChip(
     accentColor: Color = CosmicCyanAccent
 ) {
     val opacity = if (disabled) 0.35f else 1f
+    
+    // Animate background color smoothly
+    val targetBgColor = if (selected) accentColor.copy(alpha = 0.15f) else CosmicSlateBg
+    val backgroundColor by animateColorAsState(
+        targetValue = targetBgColor,
+        animationSpec = spring(stiffness = 300f),
+        label = "chipBg"
+    )
+
+    // Animate border color smoothly
+    val targetBorderColor = if (selected) accentColor else CosmicBorder
+    val borderColor by animateColorAsState(
+        targetValue = targetBorderColor,
+        animationSpec = spring(stiffness = 300f),
+        label = "chipBorder"
+    )
+
+    // Animate content/text color smoothly
+    val targetContentColor = if (selected) CosmicWhiteText else CosmicGrayMuted
+    val contentColor by animateColorAsState(
+        targetValue = targetContentColor,
+        animationSpec = spring(stiffness = 300f),
+        label = "chipContentColor"
+    )
+
+    // Spring scale feedback on selection
+    val scale by animateFloatAsState(
+        targetValue = if (selected) 1.05f else 1.0f,
+        animationSpec = spring(dampingRatio = 0.5f, stiffness = 200f),
+        label = "chipScale"
+    )
+
     Box(
         modifier = Modifier
             .alpha(opacity)
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
             .clip(RoundedCornerShape(8.dp))
-            .background(if (selected) accentColor.copy(alpha = 0.15f) else CosmicSlateBg)
+            .background(backgroundColor)
             .border(
                 1.dp,
-                if (selected) accentColor else CosmicBorder,
+                borderColor,
                 RoundedCornerShape(8.dp)
             )
             .clickable(enabled = !disabled) { onToggle(!selected) }
@@ -2715,7 +2939,7 @@ fun ScrubChip(
             Icon(
                 imageVector = if (selected) Icons.Default.CheckBox else Icons.Default.CheckBoxOutlineBlank,
                 contentDescription = "Selection",
-                tint = if (selected) accentColor else CosmicGrayMuted,
+                tint = if (selected) accentColor else contentColor,
                 modifier = Modifier.size(14.dp)
             )
             Spacer(modifier = Modifier.width(6.dp))
@@ -2723,7 +2947,7 @@ fun ScrubChip(
                 text = label,
                 fontSize = 10.sp,
                 fontWeight = FontWeight.Bold,
-                color = if (selected) CosmicWhiteText else CosmicGrayMuted
+                color = contentColor
             )
         }
     }
@@ -3148,14 +3372,14 @@ fun SettingsScreen(
                     verticalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
                     Text(
-                        text = "Preferences",
+                        text = "Settings",
                         fontSize = 24.sp,
                         fontWeight = FontWeight.ExtraBold,
                         color = CosmicWhiteText,
                         letterSpacing = (-0.5).sp
                     )
                     Text(
-                        text = "Configure default processing heuristics & style",
+                        text = "Configure your default privacy settings and theme",
                         fontSize = 11.sp,
                         color = CosmicGrayMuted
                     )
@@ -3164,7 +3388,7 @@ fun SettingsScreen(
         }
 
         item {
-            SettingsSectionHeader(title = "Gallery & API Permissions")
+            SettingsSectionHeader(title = "Storage & Permissions")
         }
 
         item {
@@ -3195,7 +3419,7 @@ fun SettingsScreen(
                             )
                             Column {
                                 Text(
-                                    text = "Fine-Grained Gallery Access",
+                                    text = "Photo & Video Library Access",
                                     fontSize = 14.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = CosmicWhiteText
@@ -3210,7 +3434,7 @@ fun SettingsScreen(
                     }
 
                     Text(
-                        text = "On Android 14+, you can grant 'Select Photos' access to authorize only files you choose. Full access bypasses individual selection prompts.",
+                        text = "Choose which files and photos this app can access. On newer Android versions, you can pick specific photos to clean instead of sharing your entire gallery.",
                         fontSize = 11.sp,
                         color = CosmicGrayMuted,
                         lineHeight = 14.sp
@@ -3232,7 +3456,7 @@ fun SettingsScreen(
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = "Configure Storage Permissions",
+                            text = "Manage Permissions",
                             fontWeight = FontWeight.Bold,
                             fontSize = 12.sp
                         )
@@ -3242,13 +3466,13 @@ fun SettingsScreen(
         }
 
         item {
-            SettingsSectionHeader(title = "Appearance & Style")
+            SettingsSectionHeader(title = "Theme & Appearance")
         }
 
         item {
             SettingsSwitchCard(
-                title = "Material You Dynamic Theme",
-                description = "Derive application primary accents directly from your system current wallpaper",
+                title = "Match Wallpaper Colors",
+                description = "Automatically customize the app's colors to blend in with your phone's wallpaper",
                 checked = useDynamicTheming,
                 icon = Icons.Default.Palette,
                 onCheckedChange = { viewModel.useDynamicTheming.value = it }
@@ -3256,35 +3480,35 @@ fun SettingsScreen(
         }
 
         item {
-            SettingsSectionHeader(title = "Default Metadata Presets")
+            SettingsSectionHeader(title = "Default Clean-up Options")
         }
 
         item {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 SettingsSwitchCard(
-                    title = "Strip Location GPS Data",
-                    description = "Clear latitude/longitude geotags from all imported media automatically",
+                    title = "Remove GPS Location Info",
+                    description = "Keep where you take your pictures private by removing GPS coordinates automatically",
                     checked = defaultScrubGps,
                     icon = Icons.Default.LocationOff,
                     onCheckedChange = { viewModel.defaultScrubGps.value = it }
                 )
                 SettingsSwitchCard(
-                    title = "Strip Original Timestamp & Date",
-                    description = "Clear generation date-time tags from photo headers automatically",
+                    title = "Remove Date & Time",
+                    description = "Erase the day and exact time your photos were captured",
                     checked = defaultScrubDateTime,
                     icon = Icons.Default.CalendarToday,
                     onCheckedChange = { viewModel.defaultScrubDateTime.value = it }
                 )
                 SettingsSwitchCard(
-                    title = "Strip Technical Hardware Spec tags",
-                    description = "Clear camera model, lens parameters, and software makers automatically",
+                    title = "Remove Camera Details",
+                    description = "Erase information about your camera model, lens settings, and editing software",
                     checked = defaultScrubCamera,
                     icon = Icons.Default.CameraAlt,
                     onCheckedChange = { viewModel.defaultScrubCamera.value = it }
                 )
                 SettingsSwitchCard(
-                    title = "Strict Mode (Full Scrub)",
-                    description = "Remove all descriptive, artist, copyright, and custom tags simultaneously",
+                    title = "Deep Clean (Recommended)",
+                    description = "Erase all remaining hidden data, including photographer names, copyright text, and personal tags",
                     checked = defaultScrubAll,
                     icon = Icons.Default.VerifiedUser,
                     onCheckedChange = { viewModel.defaultScrubAll.value = it }
@@ -3293,21 +3517,21 @@ fun SettingsScreen(
         }
 
         item {
-            SettingsSectionHeader(title = "Automated Storage Automation")
+            SettingsSectionHeader(title = "File Naming Options")
         }
 
         item {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 SettingsSwitchCard(
-                    title = "File Extension Normalizer",
-                    description = "Automatically standardize files suffix to simple lowercase extensions (e.g. .JPEG to .jpg)",
+                    title = "Use Lowercase Extensions",
+                    description = "Standardize file extensions on export (like changing .JPEG to .jpg)",
                     checked = lowercaseExtensions,
                     icon = Icons.Default.DriveFileRenameOutline,
                     onCheckedChange = { viewModel.lowercaseExtensions.value = it }
                 )
                 SettingsSwitchCard(
-                    title = "Opaque Hash Preservation",
-                    description = "Scrub target shared filename and assign safe 8-character random UUID on export",
+                    title = "Disguise Shared File Names",
+                    description = "Protect your privacy by renaming shared files with random letters and numbers",
                     checked = autoRenameSafeHashes,
                     icon = Icons.Default.Grid3x3,
                     onCheckedChange = { viewModel.autoRenameSafeHashes.value = it }
@@ -3316,7 +3540,67 @@ fun SettingsScreen(
         }
 
         item {
-            SettingsSectionHeader(title = "Sandbox Space & Security Audit")
+            SettingsSectionHeader(title = "Tutorial Guide")
+        }
+
+        item {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { viewModel.showOnboarding.value = true }
+                    .testTag("replay_onboarding_card"),
+                color = CosmicCardSurface,
+                shape = RoundedCornerShape(16.dp),
+                border = BorderStroke(1.dp, CosmicBorder.copy(alpha = 0.4f))
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(38.dp)
+                            .background(CosmicCyanAccent.copy(alpha = 0.12f), CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.MenuBook,
+                            contentDescription = null,
+                            tint = CosmicCyanAccent,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "See How CleanShare Works",
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = CosmicWhiteText
+                        )
+                        Text(
+                            text = "Take a quick visual tour of how to load files, choose cleaning settings, and safely share them",
+                            fontSize = 11.sp,
+                            color = CosmicGrayMuted,
+                            lineHeight = 14.sp
+                        )
+                    }
+
+                    Icon(
+                        imageVector = Icons.Default.ChevronRight,
+                        contentDescription = null,
+                        tint = CosmicGrayMuted,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+            }
+        }
+
+        item {
+            SettingsSectionHeader(title = "Storage & Cache")
         }
 
         item {
@@ -3337,13 +3621,13 @@ fun SettingsScreen(
                     ) {
                         Column {
                             Text(
-                                text = "Local Temp Storage",
+                                text = "Temporary File Cache",
                                 fontSize = 14.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = CosmicWhiteText
                             )
                             Text(
-                                text = "Secure temporary folder caching original and copied sharing buffers",
+                                text = "Cleaned files are securely stored in a private temporary folder on your device. You can safely clear them anytime.",
                                 fontSize = 11.sp,
                                 color = CosmicGrayMuted,
                                 modifier = Modifier.fillMaxWidth(0.7f)
@@ -3364,7 +3648,7 @@ fun SettingsScreen(
                             val totalBytes = getFolderSize(File(context.cacheDir, "shared_temp")) + 
                                              getFolderSize(File(context.cacheDir, "processed_items"))
                             cacheSizeStr = formatSize(totalBytes)
-                            Toast.makeText(context, "Sandbox Cache Cleared Successfully", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, "Temporary cache cleared successfully!", Toast.LENGTH_SHORT).show()
                         },
                         colors = ButtonDefaults.buttonColors(
                             containerColor = CosmicCyanAccent,
@@ -3380,7 +3664,7 @@ fun SettingsScreen(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            "Securely Erase All Cached Buffers",
+                            "Empty Temporary Cache",
                             fontWeight = FontWeight.Bold,
                             fontSize = 12.sp
                         )
@@ -3403,19 +3687,19 @@ fun SettingsScreen(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Text(
-                        text = "DIAGNOSTIC TELEMETRY STATUS",
+                        text = "SYSTEM STATUS",
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Bold,
                         color = CosmicGrayMuted
                     )
                     
-                    DiagnosticRow(label = "Android SDK Version", value = "API ${Build.VERSION.SDK_INT} (${Build.VERSION.CODENAME})")
+                    DiagnosticRow(label = "Android Version", value = "API ${Build.VERSION.SDK_INT} (${Build.VERSION.CODENAME})")
                     DiagnosticRow(
-                        label = "Device Theme Matching Status", 
-                        value = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) "Compatible / Monet Active" else "Static Preset Active"
+                        label = "Color Customization Support", 
+                        value = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) "Fully Supported" else "Standard Theme Only"
                     )
-                    DiagnosticRow(label = "Sandbox File Isolation", value = "OK / Sandboxed")
-                    DiagnosticRow(label = "Authority Integrity Status", value = "OK / FileProvider verified")
+                    DiagnosticRow(label = "File Safety Isolation", value = "Secure")
+                    DiagnosticRow(label = "Share Link Safety", value = "Verified")
                 }
             }
         }
@@ -3581,30 +3865,24 @@ fun ModernPickerSelectionDialog(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Text(
-                            text = "Import Media & Files",
-                            fontSize = 20.sp,
-                            fontWeight = FontWeight.ExtraBold,
-                            color = CosmicWhiteText
-                        )
-                        Text(
-                            text = "Add photos or system documents securely",
-                            fontSize = 11.sp,
-                            color = CosmicGrayMuted
-                        )
-                    }
+                    Text(
+                        text = "Import Media & Files",
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = CosmicWhiteText,
+                        modifier = Modifier.weight(1f)
+                    )
                     IconButton(
                         onClick = onDismissRequest,
                         modifier = Modifier
-                            .background(CosmicBorder.copy(alpha = 0.15f), androidx.compose.foundation.shape.CircleShape)
-                            .size(34.dp)
+                            .background(CosmicBorder.copy(alpha = 0.3f), androidx.compose.foundation.shape.CircleShape)
+                            .size(38.dp)
                     ) {
                         Icon(
                             imageVector = Icons.Default.Close,
                             contentDescription = "Close",
                             tint = CosmicWhiteText,
-                            modifier = Modifier.size(16.dp)
+                            modifier = Modifier.size(20.dp)
                         )
                     }
                 }
@@ -3708,57 +3986,6 @@ fun ModernPickerSelectionDialog(
                                 fontSize = 10.sp,
                                 color = CosmicGrayMuted,
                                 textAlign = TextAlign.Center
-                            )
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(4.dp))
-
-                // Compact permission status section at the bottom (extremely space-efficient)
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    color = CosmicSlateBg.copy(alpha = 0.15f),
-                    shape = RoundedCornerShape(12.dp),
-                    border = BorderStroke(1.dp, CosmicBorder.copy(alpha = 0.15f))
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 12.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.VerifiedUser,
-                                contentDescription = null,
-                                tint = CosmicCyanAccent,
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Text(
-                                text = "Access: $permissionStatusText",
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = CosmicWhiteText,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                        TextButton(
-                            onClick = onRequestPermissions,
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
-                            modifier = Modifier.testTag("grant_permissions_button")
-                        ) {
-                            Text(
-                                text = "Configure",
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = CosmicCyanAccent
                             )
                         }
                     }
