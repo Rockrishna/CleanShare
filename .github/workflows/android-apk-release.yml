@@ -10,7 +10,7 @@ on:
 
 permissions:
   contents: write
-
+  actions: write
 jobs:
   build-and-release:
     runs-on: ubuntu-latest
