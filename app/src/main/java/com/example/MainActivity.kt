@@ -19,9 +19,9 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.result.PickVisualMediaRequest
 import android.Manifest
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -50,7 +50,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -134,7 +133,6 @@ class MainActivity : ComponentActivity() {
             MyApplicationTheme(dynamicColor = useDynamicTheming) {
                 if (showOnboarding) {
                     OnboardingScreen(
-                        viewModel = fileViewModel,
                         onDismiss = { fileViewModel.setOnboardingSeen(this) }
                     )
                 } else {
@@ -199,9 +197,7 @@ fun MainContentScreen(
 ) {
     val context = LocalContext.current
     val filesList by viewModel.files.collectAsStateWithLifecycle()
-    val loadingState by viewModel.loadingState.collectAsStateWithLifecycle()
     val shareState by viewModel.shareState.collectAsStateWithLifecycle()
-    val useDynamicTheming by viewModel.useDynamicTheming.collectAsStateWithLifecycle()
 
     var currentMainTab by remember { mutableStateOf("cleaner") } // "cleaner" or "settings"
 
@@ -257,6 +253,7 @@ fun MainContentScreen(
     var activeTab by remember { mutableStateOf("rename") } // "rename" or "scrub"
     var currentScreenModeTab by remember { mutableStateOf("single") } // "single" or "batch"
     var showConfirmPreviewScreen by remember { mutableStateOf(false) }
+    var animatedCheckIn by remember { mutableStateOf(false) }
 
     // Reset carousel index if list is cleared
     LaunchedEffect(filesList.size) {
@@ -268,35 +265,23 @@ fun MainContentScreen(
         }
     }
 
-    // Reaction to sharing state prepared by the model
-    LaunchedEffect(shareState) {
-        if (shareState is ShareState.Prepared) {
-            val prepared = shareState as ShareState.Prepared
-            try {
-                // Launch Share Chooser
-                val chooser = Intent.createChooser(prepared.intent, "Send Cleaned Files")
-                context.startActivity(chooser)
-                showConfirmPreviewScreen = false
-            } catch (e: Exception) {
-                Toast.makeText(context, "Sharing failed: ${e.message}", Toast.LENGTH_LONG).show()
-                showConfirmPreviewScreen = false
-            } finally {
-                viewModel.resetShareState()
-            }
-        } else if (shareState is ShareState.Error) {
-            showConfirmPreviewScreen = false
+    // Reset sharing state when the confirmation dialog is dismissed
+    LaunchedEffect(showConfirmPreviewScreen) {
+        if (!showConfirmPreviewScreen) {
+            viewModel.resetShareState()
         }
     }
 
-    Scaffold(
-        modifier = Modifier.fillMaxSize()
-    ) { innerScaffoldPadding ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerScaffoldPadding)
-                .background(CosmicSlateBg)
-        ) {
+    Box(modifier = Modifier.fillMaxSize()) {
+        Scaffold(
+            modifier = Modifier.fillMaxSize()
+        ) { innerScaffoldPadding ->
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerScaffoldPadding)
+                    .background(CosmicSlateBg)
+            ) {
             if (currentMainTab == "cleaner") {
                 BoxWithConstraints(
                     modifier = Modifier
@@ -558,9 +543,9 @@ fun MainContentScreen(
                 }
             }
         }
-        // Processing screen blocking indicator
+        // Processing screen blocking indicator (Legacy)
         AnimatedVisibility(
-            visible = shareState is ShareState.Processing && !showConfirmPreviewScreen,
+            visible = false, // Disabled in favor of the full-page unified overlay
             enter = fadeIn(animationSpec = tween(300)) + scaleIn(initialScale = 0.92f, animationSpec = spring(dampingRatio = 0.7f, stiffness = 150f)),
             exit = fadeOut(animationSpec = tween(200)) + scaleOut(targetScale = 0.92f, animationSpec = tween(200))
         ) {
@@ -672,232 +657,221 @@ fun MainContentScreen(
                 }
             )
         }
+    }
+}
+}
+}
 
-        // Beautiful full confirmation preview overlay screen (now replaced with clean animated check success screen + vibration)
+        // --- FULL PAGE OVERLAY (Progress -> Completion) ---
         if (showConfirmPreviewScreen) {
-            androidx.compose.ui.window.Dialog(
-                onDismissRequest = { showConfirmPreviewScreen = false },
-                properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
-            ) {
-                var animatedCheckIn by remember { mutableStateOf(false) }
-                val context = LocalContext.current
+            val currentShareState by viewModel.shareState.collectAsStateWithLifecycle()
 
-                LaunchedEffect(Unit) {
-                    // Start of checkmark anim
+            BackHandler {
+                showConfirmPreviewScreen = false
+                animatedCheckIn = false
+                viewModel.resetShareState()
+            }
+
+            LaunchedEffect(Unit) {
+                viewModel.processAndPrepareShare(context)
+            }
+
+            LaunchedEffect(currentShareState) {
+                if (currentShareState is ShareState.Prepared) {
                     delay(120)
                     animatedCheckIn = true
 
-                    // Perform high-quality premium vibration haptic feedback
+                    // Premium vibration haptic feedback
                     val vibrator = context.getSystemService(Context.VIBRATOR_SERVICE) as? android.os.Vibrator
                     vibrator?.let { v ->
                         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                            v.vibrate(
-                                android.os.VibrationEffect.createWaveform(
-                                    longArrayOf(0, 90, 110, 150), // Off, On (delicate tap), Off, On (assertive confirm)
-                                    intArrayOf(0, 140, 0, 245),
-                                    -1
-                                )
-                            )
+                            v.vibrate(android.os.VibrationEffect.createWaveform(longArrayOf(0, 90, 110, 150), intArrayOf(0, 140, 0, 245), -1))
                         } else {
                             @Suppress("DEPRECATION")
                             v.vibrate(longArrayOf(0, 90, 110, 150), -1)
                         }
                     }
 
-                    // Minimum presentation time of checkmark & ripple visuals
-                    delay(1500)
+                    delay(1600)
 
-                    // Execute actual file scrub + formatting and open share intent
-                    viewModel.processAndPrepareShare(context)
+                    // Launch Share intent while staying on this screen
+                    val prepared = currentShareState as ShareState.Prepared
+                    try {
+                        val chooser = Intent.createChooser(prepared.intent, "Send Cleaned Files")
+                        context.startActivity(chooser)
+                    } catch (e: Exception) {
+                        Toast.makeText(context, "Sharing failed: ${e.message}", Toast.LENGTH_LONG).show()
+                        showConfirmPreviewScreen = false
+                    }
+                } else if (currentShareState is ShareState.Error) {
+                    showConfirmPreviewScreen = false
                 }
+            }
 
-                Surface(
-                    modifier = Modifier.fillMaxSize(),
-                    color = CosmicSlateBg
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .statusBarsPadding()
-                            .navigationBarsPadding()
-                            .padding(24.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center
-                    ) {
-                        val infiniteTransition = rememberInfiniteTransition(label = "ripple")
-
-                        // Sonar wave ripple 1
-                        val rippleScale1 by infiniteTransition.animateFloat(
-                            initialValue = 1.0f,
-                            targetValue = 2.4f,
-                            animationSpec = infiniteRepeatable(
-                                animation = tween(1500, easing = FastOutSlowInEasing),
-                                repeatMode = RepeatMode.Restart
-                            ),
-                            label = "rippleScale1"
-                        )
-                        val rippleAlpha1 by infiniteTransition.animateFloat(
-                            initialValue = 0.75f,
-                            targetValue = 0.0f,
-                            animationSpec = infiniteRepeatable(
-                                animation = tween(1500, easing = FastOutSlowInEasing),
-                                repeatMode = RepeatMode.Restart
-                            ),
-                            label = "rippleAlpha1"
-                        )
-
-                        // Sonar wave ripple 2 (delayed offset using custom keyframes)
-                        val rippleScale2 by infiniteTransition.animateFloat(
-                            initialValue = 1.0f,
-                            targetValue = 2.4f,
-                            animationSpec = infiniteRepeatable(
-                                animation = keyframes {
-                                    durationMillis = 1500
-                                    1.0f at 0
-                                    1.0f at 400
-                                    2.4f at 1500
-                                },
-                                repeatMode = RepeatMode.Restart
-                            ),
-                            label = "rippleScale2"
-                        )
-                        val rippleAlpha2 by infiniteTransition.animateFloat(
-                            initialValue = 0.0f,
-                            targetValue = 0.0f,
-                            animationSpec = infiniteRepeatable(
-                                animation = keyframes {
-                                    durationMillis = 1500
-                                    0.0f at 0
-                                    0.75f at 400
-                                    0.0f at 1500
-                                },
-                                repeatMode = RepeatMode.Restart
-                            ),
-                            label = "rippleAlpha2"
-                        )
-
-                        Box(
-                            modifier = Modifier.size(240.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            // Ripple 2
-                            Box(
-                                modifier = Modifier
-                                    .size(96.dp)
-                                    .graphicsLayer {
-                                        scaleX = rippleScale2
-                                        scaleY = rippleScale2
-                                        alpha = rippleAlpha2
-                                    }
-                                    .background(Color(0xFF22C55E).copy(alpha = 0.22f), CircleShape)
-                                    .border(1.5.dp, Color(0xFF22C55E).copy(alpha = 0.6f), CircleShape)
-                            )
-
-                            // Ripple 1
-                            Box(
-                                modifier = Modifier
-                                    .size(96.dp)
-                                    .graphicsLayer {
-                                        scaleX = rippleScale1
-                                        scaleY = rippleScale1
-                                        alpha = rippleAlpha1
-                                    }
-                                    .background(Color(0xFF22C55E).copy(alpha = 0.22f), CircleShape)
-                                    .border(1.5.dp, Color(0xFF22C55E).copy(alpha = 0.6f), CircleShape)
-                            )
-
-                            // Main solid check container with bouncy pop entry
-                            val checkmarkScale by animateFloatAsState(
-                                targetValue = if (animatedCheckIn) 1.0f else 0.0f,
-                                animationSpec = spring(
-                                    dampingRatio = 0.55f,
-                                    stiffness = 150f
-                                ),
-                                label = "checkmarkScale"
-                            )
-
-                            Box(
-                                modifier = Modifier
-                                    .size(96.dp)
-                                    .graphicsLayer {
-                                        scaleX = checkmarkScale
-                                        scaleY = checkmarkScale
-                                    }
-                                    .border(2.dp, CosmicWhiteText.copy(alpha = 0.2f), CircleShape)
-                                    .background(Color(0xFF22C55E), CircleShape),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Check,
-                                    contentDescription = "Ready",
-                                    tint = Color.White,
-                                    modifier = Modifier.size(48.dp)
-                                )
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(32.dp))
-
-                        // Success header text
-                        Text(
-                            text = "Cleaned & Ready!",
-                            fontSize = 24.sp,
-                            fontWeight = FontWeight.ExtraBold,
-                            color = CosmicWhiteText,
-                            fontFamily = FontFamily.SansSerif,
-                            letterSpacing = (-0.5).sp
-                        )
-
-                        Spacer(modifier = Modifier.height(10.dp))
-
-                        // Subtitle detailing what has been sanitised
-                        Text(
-                            text = "Original properties, location markers, and EXIF tags stripped. Dispensing cleaned copy...",
-                            fontSize = 13.sp,
-                            color = CosmicGrayMuted,
-                            textAlign = TextAlign.Center,
-                            lineHeight = 20.sp,
-                            modifier = Modifier.padding(horizontal = 24.dp)
-                        )
-                        
-                        Spacer(modifier = Modifier.height(40.dp))
-                        
-                        // Small aesthetic loading bar while preparing the share sheet
-                        Box(
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(CosmicSlateBg)
+                    .clickable(enabled = false) { /* Block clicks to background */ }
+            ) {
+                AnimatedContent(
+                    targetState = currentShareState,
+                    transitionSpec = {
+                        fadeIn(animationSpec = tween(500)) togetherWith fadeOut(animationSpec = tween(500))
+                    },
+                    label = "overlayPageTransition",
+                    modifier = Modifier.fillMaxSize()
+                ) { state ->
+                    if (state is ShareState.Prepared) {
+                        // SUCCESS / COMPLETION PAGE
+                        Column(
                             modifier = Modifier
-                                .width(120.dp)
-                                .height(4.dp)
-                                .background(CosmicBorder, RoundedCornerShape(2.dp))
+                                .fillMaxSize()
+                                .statusBarsPadding()
+                                .navigationBarsPadding()
+                                .padding(24.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
                         ) {
-                            val loadingTransition = rememberInfiniteTransition(label = "loadingProgress")
-                            val progressOffset by loadingTransition.animateFloat(
-                                initialValue = -60f,
-                                targetValue = 60f,
-                                animationSpec = infiniteRepeatable(
-                                    animation = tween(1200, easing = FastOutSlowInEasing),
-                                    repeatMode = RepeatMode.Reverse
-                                ),
-                                label = "progress"
+                            val infiniteTransition = rememberInfiniteTransition(label = "ripple")
+
+                            val rippleScale1 by infiniteTransition.animateFloat(
+                                initialValue = 1.0f,
+                                targetValue = 2.4f,
+                                animationSpec = infiniteRepeatable(animation = tween(1500, easing = FastOutSlowInEasing), repeatMode = RepeatMode.Restart),
+                                label = "rippleScale1"
                             )
-                            
-                            Box(
-                                modifier = Modifier
-                                    .width(40.dp)
-                                    .fillMaxHeight()
-                                    .graphicsLayer {
-                                        translationX = progressOffset
-                                    }
-                                    .background(Color(0xFF22C55E), RoundedCornerShape(2.dp))
+                            val rippleAlpha1 by infiniteTransition.animateFloat(
+                                initialValue = 0.75f,
+                                targetValue = 0.0f,
+                                animationSpec = infiniteRepeatable(animation = tween(1500, easing = FastOutSlowInEasing), repeatMode = RepeatMode.Restart),
+                                label = "rippleAlpha1"
+                            )
+
+                            val rippleScale2 by infiniteTransition.animateFloat(
+                                initialValue = 1.0f,
+                                targetValue = 2.4f,
+                                animationSpec = infiniteRepeatable(
+                                    animation = keyframes { durationMillis = 1500; 1.0f at 0; 1.0f at 400; 2.4f at 1500 },
+                                    repeatMode = RepeatMode.Restart
+                                ),
+                                label = "rippleScale2"
+                            )
+                            val rippleAlpha2 by infiniteTransition.animateFloat(
+                                initialValue = 0.0f,
+                                targetValue = 0.0f,
+                                animationSpec = infiniteRepeatable(
+                                    animation = keyframes { durationMillis = 1500; 0.0f at 0; 0.75f at 400; 0.0f at 1500 },
+                                    repeatMode = RepeatMode.Restart
+                                ),
+                                label = "rippleAlpha2"
+                            )
+
+                            Box(modifier = Modifier.size(240.dp), contentAlignment = Alignment.Center) {
+                                Box(
+                                    modifier = Modifier.size(96.dp).graphicsLayer { scaleX = rippleScale2; scaleY = rippleScale2; alpha = rippleAlpha2 }
+                                        .background(Color(0xFF22C55E).copy(alpha = 0.22f), CircleShape)
+                                        .border(1.5.dp, Color(0xFF22C55E).copy(alpha = 0.6f), CircleShape)
+                                )
+                                Box(
+                                    modifier = Modifier.size(96.dp).graphicsLayer { scaleX = rippleScale1; scaleY = rippleScale1; alpha = rippleAlpha1 }
+                                        .background(Color(0xFF22C55E).copy(alpha = 0.22f), CircleShape)
+                                        .border(1.5.dp, Color(0xFF22C55E).copy(alpha = 0.6f), CircleShape)
+                                )
+
+                                val checkmarkScale by animateFloatAsState(
+                                    targetValue = if (animatedCheckIn) 1.0f else 0.0f,
+                                    animationSpec = spring(dampingRatio = 0.55f, stiffness = 150f),
+                                    label = "checkmarkScale"
+                                )
+
+                                Box(
+                                    modifier = Modifier.size(96.dp).graphicsLayer { scaleX = checkmarkScale; scaleY = checkmarkScale }
+                                        .border(2.dp, CosmicWhiteText.copy(alpha = 0.2f), CircleShape)
+                                        .background(Color(0xFF22C55E), CircleShape),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(imageVector = Icons.Default.Check, contentDescription = "Ready", tint = Color.White, modifier = Modifier.size(48.dp))
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(32.dp))
+
+                            Text(
+                                text = "Cleaned & Ready!",
+                                fontSize = 24.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = CosmicWhiteText,
+                                fontFamily = FontFamily.SansSerif,
+                                letterSpacing = (-0.5).sp
+                            )
+
+                            Spacer(modifier = Modifier.height(10.dp))
+
+                            Text(
+                                text = "Original properties, location markers, and EXIF tags stripped. Dispensing cleaned copy...",
+                                fontSize = 13.sp,
+                                color = CosmicGrayMuted,
+                                textAlign = TextAlign.Center,
+                                lineHeight = 20.sp,
+                                modifier = Modifier.padding(horizontal = 24.dp)
+                            )
+                        }
+                    } else {
+                        // PROGRESS PAGE
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .statusBarsPadding()
+                                .navigationBarsPadding()
+                                .padding(24.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            CircularProgressIndicator(
+                                color = CosmicCyanAccent,
+                                strokeWidth = 3.2.dp,
+                                modifier = Modifier.size(44.dp)
+                            )
+                            Spacer(modifier = Modifier.height(24.dp))
+                            Text(
+                                text = "Scrubbing & Renaming files...",
+                                color = CosmicWhiteText,
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                letterSpacing = (-0.5).sp
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = "Preparing your privacy-safe copies",
+                                color = CosmicGrayMuted,
+                                fontSize = 13.sp,
+                                textAlign = TextAlign.Center
                             )
                         }
                     }
                 }
+
+                // Close button for the full screen overlay
+                IconButton(
+                    onClick = {
+                        showConfirmPreviewScreen = false
+                        animatedCheckIn = false
+                        viewModel.resetShareState()
+                    },
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .statusBarsPadding()
+                        .padding(16.dp)
+                        .background(CosmicBorder.copy(alpha = 0.2f), CircleShape)
+                ) {
+                    Icon(imageVector = Icons.Default.Close, contentDescription = "Close Overlay", tint = CosmicWhiteText)
+                }
             }
         }
     }
-}
 
-            if (currentMainTab == "settings") {
+    if (currentMainTab == "settings") {
                 SettingsScreen(
                     viewModel = viewModel,
                     onBackClick = { currentMainTab = "cleaner" },
@@ -925,9 +899,6 @@ fun MainContentScreen(
                     }
                 )
             }
-        }
-    }
-
     if (showPickerSelectionDialog) {
         ModernPickerSelectionDialog(
             onDismissRequest = { showPickerSelectionDialog = false },
@@ -2328,7 +2299,7 @@ fun BatchControlBoard(
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Icon(
-                            imageVector = Icons.Default.List,
+                            imageVector = Icons.AutoMirrored.Filled.List,
                             contentDescription = "Preview list",
                             tint = CosmicCyanAccent,
                             modifier = Modifier.size(22.dp)

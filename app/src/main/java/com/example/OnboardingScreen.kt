@@ -5,11 +5,11 @@ import androidx.compose.animation.core.*
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.*
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -19,7 +19,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -29,10 +28,8 @@ import androidx.compose.ui.unit.sp
 
 @Composable
 fun OnboardingScreen(
-    viewModel: FileViewModel,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
 ) {
-    val context = LocalContext.current
     var currentPage by remember { mutableIntStateOf(0) }
     val totalPages = 4
 
@@ -87,7 +84,7 @@ fun OnboardingScreen(
                     )
                 }
 
-                if (currentPage < totalPages - 1) {
+                if (currentPage < (totalPages - 1)) {
                     TextButton(
                         onClick = onDismiss,
                         colors = ButtonDefaults.textButtonColors(contentColor = CosmicGrayMuted),
@@ -217,7 +214,7 @@ fun OnboardingScreen(
                 // Action controls
                 Button(
                     onClick = {
-                        if (currentPage < totalPages - 1) {
+                        if (currentPage < (totalPages - 1)) {
                             currentPage++
                         } else {
                             onDismiss()
@@ -250,7 +247,7 @@ fun OnboardingScreen(
                                 fontWeight = FontWeight.Bold
                             )
                             Icon(
-                                imageVector = if (isLastPage) Icons.Default.Launch else Icons.Default.ArrowForward,
+                                imageVector = if (isLastPage) Icons.AutoMirrored.Filled.Launch else Icons.AutoMirrored.Filled.ArrowForward,
                                 contentDescription = null,
                                 modifier = Modifier.size(16.dp)
                             )
@@ -346,7 +343,7 @@ fun StepIllustrationImport() {
                 horizontalAlignment = Alignment.Start
             ) {
                 Icon(
-                    imageVector = Icons.Default.InsertDriveFile,
+                    imageVector = Icons.AutoMirrored.Filled.InsertDriveFile,
                     contentDescription = null,
                     tint = CosmicSlateBg,
                     modifier = Modifier.size(18.dp)
@@ -442,7 +439,7 @@ fun StepIllustrationScrub() {
                     }
                 }
 
-                Divider(color = CosmicDivider, thickness = 1.dp)
+                HorizontalDivider(color = CosmicDivider, thickness = 1.dp)
 
                 // List of EXIF metadata rows with dynamic color scrub status animations
                 ExifTagRow(
@@ -725,7 +722,7 @@ fun StepIllustrationShare() {
             border = BorderStroke(1.dp, CosmicBorder)
         ) {
             Icon(
-                imageVector = Icons.Default.Send, // beautifully resembling sandboxed dispatch air plane standard
+                imageVector = Icons.AutoMirrored.Filled.Send, // beautifully resembling sandboxed dispatch air plane standard
                 contentDescription = null,
                 tint = CosmicCyanAccent,
                 modifier = Modifier

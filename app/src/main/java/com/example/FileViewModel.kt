@@ -21,15 +21,15 @@ import java.security.SecureRandom
 import java.text.DecimalFormat
 
 sealed class LoadingState {
-    object Idle : LoadingState()
-    object Loading : LoadingState()
+    data object Idle : LoadingState()
+    data object Loading : LoadingState()
     data class Success(val count: Int) : LoadingState()
     data class Error(val message: String) : LoadingState()
 }
 
 sealed class ShareState {
-    object Idle : ShareState()
-    object Processing : ShareState()
+    data object Idle : ShareState()
+    data object Processing : ShareState()
     data class Prepared(val intent: Intent, val fileUris: List<Uri>) : ShareState()
     data class Error(val message: String) : ShareState()
 }
@@ -387,22 +387,6 @@ class FileViewModel : ViewModel() {
             val newBase = if (allUppercase) baseName.uppercase() else baseName.lowercase()
             val finalName = if (ext.isNotEmpty()) "$newBase.$ext" else newBase
             item.copy(currentName = finalName)
-        }
-    }
-
-    // BATCH METADATA SCRUBBING SCHEMES
-    fun applyBatchScrubAction(scrubGps: Boolean, scrubCamera: Boolean, scrubDate: Boolean, scrubAll: Boolean) {
-        _files.value = _files.value.map { item ->
-            if (item.hasExif) {
-                item.copy(
-                    optionScrubGps = scrubGps,
-                    optionScrubCamera = scrubCamera,
-                    optionScrubDateTime = scrubDate,
-                    optionScrubAll = scrubAll
-                )
-            } else {
-                item
-            }
         }
     }
 
