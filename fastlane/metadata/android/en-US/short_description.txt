@@ -1,0 +1,1 @@
+Rename files and strip metadata before sharing them

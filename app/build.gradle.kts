@@ -3,15 +3,14 @@ plugins {
   alias(libs.plugins.kotlin.compose)
   alias(libs.plugins.google.devtools.ksp)
   alias(libs.plugins.roborazzi)
-  alias(libs.plugins.secrets)
 }
 
 android {
-  namespace = "com.example"
+  namespace = "com.rockrishna.cleanshare"
   compileSdk { version = release(36) { minorApiLevel = 1 } }
 
   defaultConfig {
-    applicationId = "com.aistudio.sharecleaner.qxwdzs"
+    applicationId = "com.rockrishna.cleanshare"
     minSdk = 24
     targetSdk = 36
     versionCode = 3
@@ -41,7 +40,15 @@ android {
       isCrunchPngs = false
       isMinifyEnabled = false
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-      signingConfig = signingConfigs.getByName("release")
+      // F-Droid (and other CI) builds have no keystore available. Fall back to
+      // debug signing so assembleRelease works without secrets; F-Droid signs
+      // the APK with its own key afterwards.
+      val keystoreFile = file(System.getenv("KEYSTORE_PATH") ?: "${rootDir}/my-upload-key.jks")
+      signingConfig = if (keystoreFile.exists() && !System.getenv("STORE_PASSWORD").isNullOrEmpty()) {
+        signingConfigs.getByName("release")
+      } else {
+        signingConfigs.getByName("debug")
+      }
     }
     debug {
       signingConfig = signingConfigs.getByName("debugConfig")
@@ -58,18 +65,10 @@ android {
   testOptions { unitTests { isIncludeAndroidResources = true } }
 }
 
-// Configure the Secrets Gradle Plugin to use .env and .env.example files
-// to match the convention used in Web projects.
-secrets {
-  propertiesFileName = ".env"
-  defaultPropertiesFileName = ".env.example"
-}
-
 // Some unused dependencies are commented out below instead of being removed.
 // This makes it easy to add them back in the future if needed.
 dependencies {
   implementation(platform(libs.androidx.compose.bom))
-  implementation(platform(libs.firebase.bom))
   // implementation(libs.accompanist.permissions)
   implementation(libs.androidx.activity.compose)
   // implementation(libs.androidx.camera.camera2)
@@ -93,7 +92,6 @@ dependencies {
   implementation(libs.coil.compose)
   implementation(libs.androidx.exifinterface)
   implementation(libs.converter.moshi)
-  // implementation(libs.firebase.ai)
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.kotlinx.coroutines.core)
   implementation(libs.logging.interceptor)

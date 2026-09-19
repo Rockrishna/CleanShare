@@ -526,7 +526,7 @@ class FileViewModel : ViewModel() {
                             }
 
                             // Share using content:// authority generated via our declared FileProvider
-                            val authority = "com.aistudio.sharecleaner.qxwdzs.fileprovider"
+                            val authority = "com.rockrishna.cleanshare.fileprovider"
                             val contentUri = FileProvider.getUriForFile(context, authority, targetFile)
                             preparedUris.add(contentUri)
                             mimeTypeSet.add(item.mimeType)
