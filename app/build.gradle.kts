@@ -44,7 +44,7 @@ android {
       // debug signing so assembleRelease works without secrets; F-Droid signs
       // the APK with its own key afterwards.
       val keystoreFile = file(System.getenv("KEYSTORE_PATH") ?: "${rootDir}/my-upload-key.jks")
-      signingConfig = if (keystoreFile.exists() && !System.getenv("STORE_PASSWORD").isNullOrEmpty()) {
+signingConfig = if (keystoreFile.exists() && !System.getenv("STORE_PASSWORD").isNullOrEmpty() && !System.getenv("KEY_PASSWORD").isNullOrEmpty()) {
         signingConfigs.getByName("release")
       } else {
         signingConfigs.getByName("debug")
