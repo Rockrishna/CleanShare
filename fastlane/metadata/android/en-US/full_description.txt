@@ -1,0 +1,9 @@
+CleanShare helps you share files safely. Rename files with custom names and strip sensitive metadata — like EXIF data in photos — before sending them to anyone.
+
+Features:
+• Rename files before sharing
+• Remove metadata to protect your privacy
+• Simple, fast interface built for quick file prep
+• Handles files shared into the app from anywhere
+
+Everything is processed on-device. Your files never leave your phone: no accounts, no ads, no tracking, and no internet connection required.
